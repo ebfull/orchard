@@ -24,6 +24,7 @@ use halo2_proofs::{
     plonk::{self, Advice, Assigned, Column},
 };
 
+/// Addition chip for constraining `a + b = c` in-circuit.
 pub mod add_chip;
 
 impl super::Config {

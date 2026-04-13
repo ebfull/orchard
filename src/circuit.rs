@@ -58,11 +58,10 @@ use halo2_gadgets::{
     utilities::lookup_range_check::{LookupRangeCheck, LookupRangeCheckConfig},
 };
 
-#[allow(missing_docs)]
+/// CommitIvk chip for deriving incoming viewing keys in-circuit.
 pub mod commit_ivk;
-#[allow(missing_docs)]
 pub mod gadget;
-#[allow(missing_docs)]
+/// NoteCommit chip for computing note commitments in-circuit.
 pub mod note_commit;
 
 pub use crate::Proof;

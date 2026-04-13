@@ -15,18 +15,21 @@ use halo2_gadgets::{
     utilities::{bool_check, RangeConstrained},
 };
 
+/// Configuration for the [`CommitIvkChip`].
 #[derive(Clone, Debug)]
 pub struct CommitIvkConfig {
     q_commit_ivk: Selector,
     advices: [Column<Advice>; 10],
 }
 
+/// Chip implementing `CommitIvk` in-circuit.
 #[derive(Clone, Debug)]
 pub struct CommitIvkChip {
     config: CommitIvkConfig,
 }
 
 impl CommitIvkChip {
+    /// Configures the chip's gate and column assignments.
     pub fn configure(
         meta: &mut ConstraintSystem<pallas::Base>,
         advices: [Column<Advice>; 10],
@@ -222,11 +225,13 @@ impl CommitIvkChip {
         config
     }
 
+    /// Constructs the chip from a [`CommitIvkConfig`].
     pub fn construct(config: CommitIvkConfig) -> Self {
         Self { config }
     }
 }
 
+/// Gadget functions for `CommitIvk` operations.
 pub mod gadgets {
     use halo2_gadgets::utilities::{
         lookup_range_check::{LookupRangeCheck, LookupRangeCheckConfig},

@@ -1,12 +1,12 @@
 use alloc::vec::Vec;
 
-pub(crate) struct TestVector {
-    pub(crate) leaves: [[u8; 32]; 16],
-    pub(crate) paths: [[[u8; 32]; 4]; 16],
-    pub(crate) root: [u8; 32],
+pub struct TestVector {
+    pub leaves: [[u8; 32]; 16],
+    pub paths: [[[u8; 32]; 4]; 16],
+    pub root: [u8; 32],
 }
 
-pub(crate) fn test_vectors() -> Vec<TestVector> {
+pub fn test_vectors() -> Vec<TestVector> {
     // From https://github.com/zcash-hackworks/zcash-test-vectors/blob/master/orchard_merkle_tree.py
     vec![
         TestVector {

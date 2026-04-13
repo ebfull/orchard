@@ -56,36 +56,36 @@ pub struct Bundle {
     ///
     /// Entries are added by the Constructor, and modified by an Updater, IO Finalizer,
     /// Signer, Combiner, or Spend Finalizer.
-    pub(crate) actions: Vec<Action>,
+    pub actions: Vec<Action>,
 
     /// The flags for the Orchard bundle.
     ///
     /// This is set by the Creator. The Constructor MUST only add spends and outputs that
     /// are consistent with these flags (i.e. are dummies as appropriate).
-    pub(crate) flags: Flags,
+    pub flags: Flags,
 
     /// The sum of the values of all `actions`.
     ///
     /// This is initialized by the Creator, and updated by the Constructor as spends or
     /// outputs are added to the PCZT. It enables per-spend and per-output values to be
     /// redacted from the PCZT after they are no longer necessary.
-    pub(crate) value_sum: ValueSum,
+    pub value_sum: ValueSum,
 
     /// The Orchard anchor for this transaction.
     ///
     /// Set by the Creator.
-    pub(crate) anchor: Anchor,
+    pub anchor: Anchor,
 
     /// The Orchard bundle proof.
     ///
     /// This is `None` until it is set by the Prover.
-    pub(crate) zkproof: Option<Proof>,
+    pub zkproof: Option<Proof>,
 
     /// The Orchard binding signature signing key.
     ///
     /// - This is `None` until it is set by the IO Finalizer.
     /// - The Transaction Extractor uses this to produce the binding signature.
-    pub(crate) bsk: Option<redpallas::SigningKey<Binding>>,
+    pub bsk: Option<redpallas::SigningKey<Binding>>,
 }
 
 impl Bundle {
@@ -110,13 +110,13 @@ impl Bundle {
 #[getset(get = "pub")]
 pub struct Action {
     /// A commitment to the net value created or consumed by this action.
-    pub(crate) cv_net: ValueCommitment,
+    pub cv_net: ValueCommitment,
 
     /// The spend half of this action.
-    pub(crate) spend: Spend,
+    pub spend: Spend,
 
     /// The output half of this action.
-    pub(crate) output: Output,
+    pub output: Output,
 
     /// The value commitment randomness.
     ///
@@ -127,7 +127,7 @@ pub struct Action {
     ///
     /// This opens `cv` for all participants. For Signers who don't need this information,
     /// or after proofs / signatures have been applied, this can be redacted.
-    pub(crate) rcv: Option<ValueCommitTrapdoor>,
+    pub rcv: Option<ValueCommitTrapdoor>,
 }
 
 /// Information about an Orchard spend within a transaction.
@@ -135,21 +135,21 @@ pub struct Action {
 #[getset(get = "pub")]
 pub struct Spend {
     /// The nullifier of the note being spent.
-    pub(crate) nullifier: Nullifier,
+    pub nullifier: Nullifier,
 
     /// The randomized verification key for the note being spent.
-    pub(crate) rk: redpallas::VerificationKey<SpendAuth>,
+    pub rk: redpallas::VerificationKey<SpendAuth>,
 
     /// The spend authorization signature.
     ///
     /// This is set by the Signer.
-    pub(crate) spend_auth_sig: Option<redpallas::Signature<SpendAuth>>,
+    pub spend_auth_sig: Option<redpallas::Signature<SpendAuth>>,
 
     /// The address that received the note being spent.
     ///
     /// - This is set by the Constructor (or Updater?).
     /// - This is required by the Prover.
-    pub(crate) recipient: Option<Address>,
+    pub recipient: Option<Address>,
 
     /// The value of the input being spent.
     ///
@@ -159,7 +159,7 @@ pub struct Spend {
     ///
     /// This exposes the input value to all participants. For Signers who don't need this
     /// information, or after signatures have been applied, this can be redacted.
-    pub(crate) value: Option<NoteValue>,
+    pub value: Option<NoteValue>,
 
     /// The rho value for the note being spent.
     ///
@@ -168,25 +168,25 @@ pub struct Spend {
     //
     // TODO: This could be merged with `rseed` into a tuple. `recipient` and `value` are
     // separate because they might need to be independently redacted. (For which role?)
-    pub(crate) rho: Option<Rho>,
+    pub rho: Option<Rho>,
 
     /// The seed randomness for the note being spent.
     ///
     /// - This is set by the Constructor.
     /// - This is required by the Prover.
-    pub(crate) rseed: Option<RandomSeed>,
+    pub rseed: Option<RandomSeed>,
 
     /// The full viewing key that received the note being spent.
     ///
     /// - This is set by the Updater.
     /// - This is required by the Prover.
-    pub(crate) fvk: Option<FullViewingKey>,
+    pub fvk: Option<FullViewingKey>,
 
     /// A witness from the note to the bundle's anchor.
     ///
     /// - This is set by the Updater.
     /// - This is required by the Prover.
-    pub(crate) witness: Option<MerklePath>,
+    pub witness: Option<MerklePath>,
 
     /// The spend authorization randomizer.
     ///
@@ -194,21 +194,21 @@ pub struct Spend {
     /// - This is required by the Signer for creating `spend_auth_sig`, and may be used to
     ///   validate `rk`.
     /// - After`zkproof` / `spend_auth_sig` has been set, this can be redacted.
-    pub(crate) alpha: Option<pallas::Scalar>,
+    pub alpha: Option<pallas::Scalar>,
 
     /// The ZIP 32 derivation path at which the spending key can be found for the note
     /// being spent.
-    pub(crate) zip32_derivation: Option<Zip32Derivation>,
+    pub zip32_derivation: Option<Zip32Derivation>,
 
     /// The spending key for this spent note, if it is a dummy note.
     ///
     /// - This is chosen by the Constructor.
     /// - This is required by the IO Finalizer, and is cleared by it once used.
     /// - Signers MUST reject PCZTs that contain `dummy_sk` values.
-    pub(crate) dummy_sk: Option<SpendingKey>,
+    pub dummy_sk: Option<SpendingKey>,
 
     /// Proprietary fields related to the note being spent.
-    pub(crate) proprietary: BTreeMap<String, Vec<u8>>,
+    pub proprietary: BTreeMap<String, Vec<u8>>,
 }
 
 /// Information about an Orchard output within a transaction.
@@ -216,7 +216,7 @@ pub struct Spend {
 #[getset(get = "pub")]
 pub struct Output {
     /// A commitment to the new note being created.
-    pub(crate) cmx: ExtractedNoteCommitment,
+    pub cmx: ExtractedNoteCommitment,
 
     /// The transmitted note ciphertext.
     ///
@@ -224,7 +224,7 @@ pub struct Output {
     /// - `ephemeral_key`
     /// - `enc_ciphertext`
     /// - `out_ciphertext`
-    pub(crate) encrypted_note: TransmittedNoteCiphertext,
+    pub encrypted_note: TransmittedNoteCiphertext,
 
     /// The address that will receive the output.
     ///
@@ -233,7 +233,7 @@ pub struct Output {
     /// - The Signer can use `recipient` and `rseed` (if present) to verify that
     ///   `enc_ciphertext` is correctly encrypted (and contains a note plaintext matching
     ///   the public commitments), and to confirm the value of the memo.
-    pub(crate) recipient: Option<Address>,
+    pub recipient: Option<Address>,
 
     /// The value of the output.
     ///
@@ -242,7 +242,7 @@ pub struct Output {
     ///
     /// This exposes the value to all participants. For Signers who don't need this
     /// information, we can drop the values and compress the rcvs into the bsk global.
-    pub(crate) value: Option<NoteValue>,
+    pub value: Option<NoteValue>,
 
     /// The seed randomness for the output.
     ///
@@ -251,7 +251,7 @@ pub struct Output {
     /// - The Signer can use `recipient` and `rseed` (if present) to verify that
     ///   `enc_ciphertext` is correctly encrypted (and contains a note plaintext matching
     ///   the public commitments), and to confirm the value of the memo.
-    pub(crate) rseed: Option<RandomSeed>,
+    pub rseed: Option<RandomSeed>,
 
     /// The `ock` value used to encrypt `out_ciphertext`.
     ///
@@ -259,20 +259,20 @@ pub struct Output {
     ///
     /// This may be `None` if the Constructor added the output using an OVK policy of
     /// "None", to make the output unrecoverable from the chain by the sender.
-    pub(crate) ock: Option<OutgoingCipherKey>,
+    pub ock: Option<OutgoingCipherKey>,
 
     /// The ZIP 32 derivation path at which the spending key can be found for the output.
-    pub(crate) zip32_derivation: Option<Zip32Derivation>,
+    pub zip32_derivation: Option<Zip32Derivation>,
 
     /// The user-facing address to which this output is being sent, if any.
     ///
     /// - This is set by an Updater.
     /// - Signers must parse this address (if present) and confirm that it contains
     ///   `recipient` (either directly, or e.g. as a receiver within a Unified Address).
-    pub(crate) user_address: Option<String>,
+    pub user_address: Option<String>,
 
     /// Proprietary fields related to the note being created.
-    pub(crate) proprietary: BTreeMap<String, Vec<u8>>,
+    pub proprietary: BTreeMap<String, Vec<u8>>,
 }
 
 impl fmt::Debug for Output {

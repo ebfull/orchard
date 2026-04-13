@@ -2,29 +2,29 @@
 
 use alloc::vec::Vec;
 
-pub(crate) struct TestVector {
-    pub(crate) sk: [u8; 32],
-    pub(crate) ask: [u8; 32],
-    pub(crate) ak: [u8; 32],
-    pub(crate) nk: [u8; 32],
-    pub(crate) rivk: [u8; 32],
-    pub(crate) ivk: [u8; 32],
-    pub(crate) ovk: [u8; 32],
-    pub(crate) dk: [u8; 32],
-    pub(crate) default_d: [u8; 11],
-    pub(crate) default_pk_d: [u8; 32],
-    pub(crate) internal_rivk: [u8; 32],
-    pub(crate) internal_ivk: [u8; 32],
-    pub(crate) internal_ovk: [u8; 32],
-    pub(crate) internal_dk: [u8; 32],
-    pub(crate) note_v: u64,
-    pub(crate) note_rho: [u8; 32],
-    pub(crate) note_rseed: [u8; 32],
-    pub(crate) note_cmx: [u8; 32],
-    pub(crate) note_nf: [u8; 32],
+pub struct TestVector {
+    pub sk: [u8; 32],
+    pub ask: [u8; 32],
+    pub ak: [u8; 32],
+    pub nk: [u8; 32],
+    pub rivk: [u8; 32],
+    pub ivk: [u8; 32],
+    pub ovk: [u8; 32],
+    pub dk: [u8; 32],
+    pub default_d: [u8; 11],
+    pub default_pk_d: [u8; 32],
+    pub internal_rivk: [u8; 32],
+    pub internal_ivk: [u8; 32],
+    pub internal_ovk: [u8; 32],
+    pub internal_dk: [u8; 32],
+    pub note_v: u64,
+    pub note_rho: [u8; 32],
+    pub note_rseed: [u8; 32],
+    pub note_cmx: [u8; 32],
+    pub note_nf: [u8; 32],
 }
 
-pub(crate) fn test_vectors() -> Vec<TestVector> {
+pub fn test_vectors() -> Vec<TestVector> {
     // From https://github.com/zcash-hackworks/zcash-test-vectors/blob/master/orchard_key_components.py
     vec![
         TestVector {

@@ -20,7 +20,7 @@ use crate::constants::{
     KEY_DIVERSIFICATION_PERSONALIZATION, L_ORCHARD_BASE,
 };
 
-pub(crate) use zcash_spec::PrfExpand;
+pub use zcash_spec::PrfExpand;
 
 /// A Pallas point that is guaranteed to not be the identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,7 +55,7 @@ impl Deref for NonIdentityPallasPoint {
 
 /// An integer in [1..q_P].
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct NonZeroPallasBase(pallas::Base);
+pub struct NonZeroPallasBase(pallas::Base);
 
 impl Default for NonZeroPallasBase {
     fn default() -> Self {
@@ -70,15 +70,15 @@ impl ConditionallySelectable for NonZeroPallasBase {
 }
 
 impl NonZeroPallasBase {
-    pub(crate) fn from_bytes(bytes: &[u8; 32]) -> CtOption<Self> {
+    pub fn from_bytes(bytes: &[u8; 32]) -> CtOption<Self> {
         pallas::Base::from_repr(*bytes).and_then(NonZeroPallasBase::from_base)
     }
 
-    pub(crate) fn to_bytes(self) -> [u8; 32] {
+    pub fn to_bytes(self) -> [u8; 32] {
         self.0.to_repr()
     }
 
-    pub(crate) fn from_base(b: pallas::Base) -> CtOption<Self> {
+    pub fn from_base(b: pallas::Base) -> CtOption<Self> {
         CtOption::new(NonZeroPallasBase(b), !b.is_zero())
     }
 
@@ -95,7 +95,7 @@ impl NonZeroPallasBase {
 
 /// An integer in [1..r_P].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct NonZeroPallasScalar(pallas::Scalar);
+pub struct NonZeroPallasScalar(pallas::Scalar);
 
 impl Default for NonZeroPallasScalar {
     fn default() -> Self {
@@ -116,11 +116,11 @@ impl ConditionallySelectable for NonZeroPallasScalar {
 }
 
 impl NonZeroPallasScalar {
-    pub(crate) fn from_bytes(bytes: &[u8; 32]) -> CtOption<Self> {
+    pub fn from_bytes(bytes: &[u8; 32]) -> CtOption<Self> {
         pallas::Scalar::from_repr(*bytes).and_then(NonZeroPallasScalar::from_scalar)
     }
 
-    pub(crate) fn from_scalar(s: pallas::Scalar) -> CtOption<Self> {
+    pub fn from_scalar(s: pallas::Scalar) -> CtOption<Self> {
         CtOption::new(NonZeroPallasScalar(s), !s.is_zero())
     }
 
@@ -146,16 +146,16 @@ impl Deref for NonZeroPallasScalar {
 const PREPARED_WINDOW_SIZE: usize = 4;
 
 #[derive(Clone, Debug)]
-pub(crate) struct PreparedNonIdentityBase(WnafBase<pallas::Point, PREPARED_WINDOW_SIZE>);
+pub struct PreparedNonIdentityBase(WnafBase<pallas::Point, PREPARED_WINDOW_SIZE>);
 
 impl PreparedNonIdentityBase {
-    pub(crate) fn new(base: NonIdentityPallasPoint) -> Self {
+    pub fn new(base: NonIdentityPallasPoint) -> Self {
         PreparedNonIdentityBase(WnafBase::new(base.0))
     }
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct PreparedNonZeroScalar(WnafScalar<pallas::Scalar, PREPARED_WINDOW_SIZE>);
+pub struct PreparedNonZeroScalar(WnafScalar<pallas::Scalar, PREPARED_WINDOW_SIZE>);
 
 #[cfg(feature = "std")]
 impl DynamicUsage for PreparedNonZeroScalar {
@@ -169,7 +169,7 @@ impl DynamicUsage for PreparedNonZeroScalar {
 }
 
 impl PreparedNonZeroScalar {
-    pub(crate) fn new(scalar: &NonZeroPallasScalar) -> Self {
+    pub fn new(scalar: &NonZeroPallasScalar) -> Self {
         PreparedNonZeroScalar(WnafScalar::new(scalar))
     }
 }
@@ -179,7 +179,7 @@ impl PreparedNonZeroScalar {
 /// Defined in [Zcash Protocol Spec § 4.2.3: Orchard Key Components][orchardkeycomponents].
 ///
 /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
-pub(crate) fn to_base(x: [u8; 64]) -> pallas::Base {
+pub fn to_base(x: [u8; 64]) -> pallas::Base {
     pallas::Base::from_uniform_bytes(&x)
 }
 
@@ -188,7 +188,7 @@ pub(crate) fn to_base(x: [u8; 64]) -> pallas::Base {
 /// Defined in [Zcash Protocol Spec § 4.2.3: Orchard Key Components][orchardkeycomponents].
 ///
 /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
-pub(crate) fn to_scalar(x: [u8; 64]) -> pallas::Scalar {
+pub fn to_scalar(x: [u8; 64]) -> pallas::Scalar {
     pallas::Scalar::from_uniform_bytes(&x)
 }
 
@@ -196,14 +196,14 @@ pub(crate) fn to_scalar(x: [u8; 64]) -> pallas::Scalar {
 ///
 /// This requires no modular reduction because Pallas' base field is smaller than its
 /// scalar field.
-pub(crate) fn mod_r_p(x: pallas::Base) -> pallas::Scalar {
+pub fn mod_r_p(x: pallas::Base) -> pallas::Scalar {
     pallas::Scalar::from_repr(x.to_repr()).unwrap()
 }
 
 /// Defined in [Zcash Protocol Spec § 5.4.8.4: Sinsemilla commitments][concretesinsemillacommit].
 ///
 /// [concretesinsemillacommit]: https://zips.z.cash/protocol/protocol.pdf#concretesinsemillacommit
-pub(crate) fn commit_ivk(
+pub fn commit_ivk(
     ak: &pallas::Base,
     nk: &pallas::Base,
     rivk: &pallas::Scalar,
@@ -222,7 +222,7 @@ pub(crate) fn commit_ivk(
 /// Defined in [Zcash Protocol Spec § 5.4.1.6: DiversifyHash^Sapling and DiversifyHash^Orchard Hash Functions][concretediversifyhash].
 ///
 /// [concretediversifyhash]: https://zips.z.cash/protocol/nu5.pdf#concretediversifyhash
-pub(crate) fn diversify_hash(d: &[u8; 11]) -> NonIdentityPallasPoint {
+pub fn diversify_hash(d: &[u8; 11]) -> NonIdentityPallasPoint {
     let hasher = pallas::Point::hash_to_curve(KEY_DIVERSIFICATION_PERSONALIZATION);
     let g_d = hasher(d);
     // If the identity occurs, we replace it with a different fixed point.
@@ -235,7 +235,7 @@ pub(crate) fn diversify_hash(d: &[u8; 11]) -> NonIdentityPallasPoint {
 /// Defined in [Zcash Protocol Spec § 5.4.2: Pseudo Random Functions][concreteprfs].
 ///
 /// [concreteprfs]: https://zips.z.cash/protocol/nu5.pdf#concreteprfs
-pub(crate) fn prf_nf(nk: pallas::Base, rho: pallas::Base) -> pallas::Base {
+pub fn prf_nf(nk: pallas::Base, rho: pallas::Base) -> pallas::Base {
     poseidon::Hash::<_, poseidon::P128Pow5T3, poseidon::ConstantLength<2>, 3, 2>::init()
         .hash([nk, rho])
 }
@@ -243,7 +243,7 @@ pub(crate) fn prf_nf(nk: pallas::Base, rho: pallas::Base) -> pallas::Base {
 /// Defined in [Zcash Protocol Spec § 5.4.5.5: Orchard Key Agreement][concreteorchardkeyagreement].
 ///
 /// [concreteorchardkeyagreement]: https://zips.z.cash/protocol/nu5.pdf#concreteorchardkeyagreement
-pub(crate) fn ka_orchard(
+pub fn ka_orchard(
     sk: &NonZeroPallasScalar,
     b: &NonIdentityPallasPoint,
 ) -> NonIdentityPallasPoint {
@@ -256,7 +256,7 @@ pub(crate) fn ka_orchard(
 /// Defined in [Zcash Protocol Spec § 5.4.5.5: Orchard Key Agreement][concreteorchardkeyagreement].
 ///
 /// [concreteorchardkeyagreement]: https://zips.z.cash/protocol/nu5.pdf#concreteorchardkeyagreement
-pub(crate) fn ka_orchard_prepared(
+pub fn ka_orchard_prepared(
     sk: &PreparedNonZeroScalar,
     b: &PreparedNonIdentityBase,
 ) -> NonIdentityPallasPoint {
@@ -268,7 +268,7 @@ pub(crate) fn ka_orchard_prepared(
 /// Defined in [Zcash Protocol Spec § 5.4.9.7: Coordinate Extractor for Pallas][concreteextractorpallas].
 ///
 /// [concreteextractorpallas]: https://zips.z.cash/protocol/nu5.pdf#concreteextractorpallas
-pub(crate) fn extract_p(point: &pallas::Point) -> pallas::Base {
+pub fn extract_p(point: &pallas::Point) -> pallas::Base {
     point
         .to_affine()
         .coordinates()
@@ -281,7 +281,7 @@ pub(crate) fn extract_p(point: &pallas::Point) -> pallas::Base {
 /// Defined in [Zcash Protocol Spec § 5.4.9.7: Coordinate Extractor for Pallas][concreteextractorpallas].
 ///
 /// [concreteextractorpallas]: https://zips.z.cash/protocol/nu5.pdf#concreteextractorpallas
-pub(crate) fn extract_p_bottom(point: CtOption<pallas::Point>) -> CtOption<pallas::Base> {
+pub fn extract_p_bottom(point: CtOption<pallas::Point>) -> CtOption<pallas::Base> {
     point.map(|p| extract_p(&p))
 }
 

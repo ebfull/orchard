@@ -115,7 +115,7 @@ impl<T: SigType> Ord for VerificationKey<T> {
 impl VerificationKey<SpendAuth> {
     /// Used in the note encryption tests.
     #[cfg(test)]
-    pub(crate) fn dummy() -> Self {
+    pub fn dummy() -> Self {
         VerificationKey((&reddsa::SigningKey::new(OsRng)).into())
     }
 
@@ -172,9 +172,11 @@ impl<T: SigType> From<&Signature<T>> for [u8; 64] {
     }
 }
 
-pub(crate) mod private {
+/// Sealed trait for signature types.
+pub mod private {
     use super::{Binding, SpendAuth};
 
+    /// Sealed trait to prevent external implementations of [`SigType`](super::SigType).
     pub trait Sealed {}
 
     impl Sealed for SpendAuth {}

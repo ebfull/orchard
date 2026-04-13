@@ -103,25 +103,44 @@ pub struct Config {
 /// The Orchard Action circuit.
 #[derive(Clone, Debug, Default)]
 pub struct Circuit {
-    pub(crate) path: Value<[MerkleHashOrchard; MERKLE_DEPTH_ORCHARD]>,
-    pub(crate) pos: Value<u32>,
-    pub(crate) g_d_old: Value<NonIdentityPallasPoint>,
-    pub(crate) pk_d_old: Value<DiversifiedTransmissionKey>,
-    pub(crate) v_old: Value<NoteValue>,
-    pub(crate) rho_old: Value<Rho>,
-    pub(crate) psi_old: Value<pallas::Base>,
-    pub(crate) rcm_old: Value<NoteCommitTrapdoor>,
-    pub(crate) cm_old: Value<NoteCommitment>,
-    pub(crate) alpha: Value<pallas::Scalar>,
-    pub(crate) ak: Value<SpendValidatingKey>,
-    pub(crate) nk: Value<NullifierDerivingKey>,
-    pub(crate) rivk: Value<CommitIvkRandomness>,
-    pub(crate) g_d_new: Value<NonIdentityPallasPoint>,
-    pub(crate) pk_d_new: Value<DiversifiedTransmissionKey>,
-    pub(crate) v_new: Value<NoteValue>,
-    pub(crate) psi_new: Value<pallas::Base>,
-    pub(crate) rcm_new: Value<NoteCommitTrapdoor>,
-    pub(crate) rcv: Value<ValueCommitTrapdoor>,
+    /// Merkle authentication path for the spent note.
+    pub path: Value<[MerkleHashOrchard; MERKLE_DEPTH_ORCHARD]>,
+    /// Position of the spent note in the commitment tree.
+    pub pos: Value<u32>,
+    /// Diversified base for the old (spent) note's address.
+    pub g_d_old: Value<NonIdentityPallasPoint>,
+    /// Diversified transmission key for the old note's address.
+    pub pk_d_old: Value<DiversifiedTransmissionKey>,
+    /// Value of the old (spent) note.
+    pub v_old: Value<NoteValue>,
+    /// Uniqueness value (rho) for the old note.
+    pub rho_old: Value<Rho>,
+    /// Psi value derived from the old note's random seed and rho.
+    pub psi_old: Value<pallas::Base>,
+    /// Note commitment trapdoor for the old note.
+    pub rcm_old: Value<NoteCommitTrapdoor>,
+    /// Commitment to the old note.
+    pub cm_old: Value<NoteCommitment>,
+    /// Randomizer for the spend authorization key.
+    pub alpha: Value<pallas::Scalar>,
+    /// Spend validating key.
+    pub ak: Value<SpendValidatingKey>,
+    /// Nullifier deriving key.
+    pub nk: Value<NullifierDerivingKey>,
+    /// Randomness for `CommitIvk`.
+    pub rivk: Value<CommitIvkRandomness>,
+    /// Diversified base for the new (output) note's address.
+    pub g_d_new: Value<NonIdentityPallasPoint>,
+    /// Diversified transmission key for the new note's address.
+    pub pk_d_new: Value<DiversifiedTransmissionKey>,
+    /// Value of the new (output) note.
+    pub v_new: Value<NoteValue>,
+    /// Psi value derived from the new note's random seed and rho.
+    pub psi_new: Value<pallas::Base>,
+    /// Note commitment trapdoor for the new note.
+    pub rcm_new: Value<NoteCommitTrapdoor>,
+    /// Value commitment trapdoor.
+    pub rcv: Value<ValueCommitTrapdoor>,
 }
 
 impl Circuit {
@@ -150,7 +169,9 @@ impl Circuit {
             .then(|| Self::from_action_context_unchecked(spend, output_note, alpha, rcv))
     }
 
-    pub(crate) fn from_action_context_unchecked(
+    /// Like [`Circuit::from_action_context`], but without checking that the output
+    /// note's rho matches the spent note's nullifier.
+    pub fn from_action_context_unchecked(
         spend: SpendInfo,
         output_note: Note,
         alpha: pallas::Scalar,
@@ -761,8 +782,10 @@ impl plonk::Circuit<pallas::Base> for Circuit {
 /// The verifying key for the Orchard Action circuit.
 #[derive(Debug)]
 pub struct VerifyingKey {
-    pub(crate) params: halo2_proofs::poly::commitment::Params<vesta::Affine>,
-    pub(crate) vk: plonk::VerifyingKey<vesta::Affine>,
+    /// The polynomial commitment parameters.
+    pub params: halo2_proofs::poly::commitment::Params<vesta::Affine>,
+    /// The verifying key.
+    pub vk: plonk::VerifyingKey<vesta::Affine>,
 }
 
 impl VerifyingKey {
@@ -800,13 +823,20 @@ impl ProvingKey {
 /// Public inputs to the Orchard Action circuit.
 #[derive(Clone, Debug)]
 pub struct Instance {
-    pub(crate) anchor: Anchor,
-    pub(crate) cv_net: ValueCommitment,
-    pub(crate) nf_old: Nullifier,
-    pub(crate) rk: VerificationKey<SpendAuth>,
-    pub(crate) cmx: ExtractedNoteCommitment,
-    pub(crate) enable_spend: bool,
-    pub(crate) enable_output: bool,
+    /// The Merkle tree anchor.
+    pub anchor: Anchor,
+    /// The net value commitment.
+    pub cv_net: ValueCommitment,
+    /// The nullifier of the spent note.
+    pub nf_old: Nullifier,
+    /// The randomized spend validating key.
+    pub rk: VerificationKey<SpendAuth>,
+    /// The x-coordinate of the note commitment for the output note.
+    pub cmx: ExtractedNoteCommitment,
+    /// Whether spending is enabled for this action.
+    pub enable_spend: bool,
+    /// Whether output is enabled for this action.
+    pub enable_output: bool,
 }
 
 impl Instance {

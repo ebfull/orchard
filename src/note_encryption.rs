@@ -27,7 +27,7 @@ const PRF_OCK_ORCHARD_PERSONALIZATION: &[u8; 16] = b"Zcash_Orchardock";
 /// Defined in [Zcash Protocol Spec § 5.4.2: Pseudo Random Functions][concreteprfs].
 ///
 /// [concreteprfs]: https://zips.z.cash/protocol/nu5.pdf#concreteprfs
-pub(crate) fn prf_ock_orchard(
+pub fn prf_ock_orchard(
     ovk: &OutgoingViewingKey,
     cv: &ValueCommitment,
     cmx_bytes: &[u8; 32],

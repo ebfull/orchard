@@ -188,7 +188,7 @@ impl SpendValidatingKey {
     /// Converts this spend validating key to its serialized form,
     /// I2LEOSP_256(ak).
     #[cfg_attr(feature = "unstable-frost", visibility::make(pub))]
-    pub(crate) fn to_bytes(&self) -> [u8; 32] {
+    pub fn to_bytes(&self) -> [u8; 32] {
         // This is correct because the wrapped point must have ỹ = 0, and
         // so the point repr is the same as I2LEOSP of its x-coordinate.
         let b = <[u8; 32]>::from(&self.0);
@@ -200,7 +200,7 @@ impl SpendValidatingKey {
     ///
     /// Returns `None` if the given slice does not contain a valid spend validating key.
     #[cfg_attr(feature = "unstable-frost", visibility::make(pub))]
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         <[u8; 32]>::try_from(bytes)
             .ok()
             .and_then(|b| {
@@ -243,17 +243,17 @@ impl From<&SpendingKey> for NullifierDerivingKey {
 
 impl NullifierDerivingKey {
     /// Computes PRF^nf on the given rho value.
-    pub(crate) fn prf_nf(&self, rho: pallas::Base) -> pallas::Base {
+    pub fn prf_nf(&self, rho: pallas::Base) -> pallas::Base {
         prf_nf(self.0, rho)
     }
 
     /// Converts this nullifier deriving key to its serialized form.
-    pub(crate) fn to_bytes(self) -> [u8; 32] {
+    pub fn to_bytes(self) -> [u8; 32] {
         <[u8; 32]>::from(self.0)
     }
 
     /// Parses a nullifier deriving key from a byte slice.
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let nk_bytes = <[u8; 32]>::try_from(bytes).ok()?;
         let nk = pallas::Base::from_repr(nk_bytes).map(NullifierDerivingKey);
         if nk.is_some().into() {
@@ -285,12 +285,12 @@ impl CommitIvkRandomness {
     }
 
     /// Converts this commit-ivk randomness to its serialized form.
-    pub(crate) fn to_bytes(self) -> [u8; 32] {
+    pub fn to_bytes(self) -> [u8; 32] {
         <[u8; 32]>::from(self.0)
     }
 
     /// Parses commit-ivk randomness from a byte slice.
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let rivk_bytes = <[u8; 32]>::try_from(bytes).ok()?;
         let rivk = pallas::Scalar::from_repr(rivk_bytes).map(CommitIvkRandomness);
         if rivk.is_some().into() {
@@ -481,7 +481,7 @@ impl FullViewingKey {
 ///
 /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct DiversifierKey([u8; 32]);
+pub struct DiversifierKey([u8; 32]);
 
 impl DiversifierKey {
     /// Returns the diversifier at the given index.
@@ -761,13 +761,13 @@ impl DiversifiedTransmissionKey {
     /// Defined in [Zcash Protocol Spec § 4.2.3: Orchard Key Components][orchardkeycomponents].
     ///
     /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
-    pub(crate) fn derive(ivk: &PreparedIncomingViewingKey, d: &Diversifier) -> Self {
+    pub fn derive(ivk: &PreparedIncomingViewingKey, d: &Diversifier) -> Self {
         let g_d = PreparedNonIdentityBase::new(diversify_hash(d.as_array()));
         DiversifiedTransmissionKey(ka_orchard_prepared(&ivk.0, &g_d))
     }
 
     /// $abst_P(bytes)$
-    pub(crate) fn from_bytes(bytes: &[u8; 32]) -> CtOption<Self> {
+    pub fn from_bytes(bytes: &[u8; 32]) -> CtOption<Self> {
         NonIdentityPallasPoint::from_bytes(bytes).map(DiversifiedTransmissionKey)
     }
 
@@ -796,7 +796,7 @@ impl ConditionallySelectable for DiversifiedTransmissionKey {
 ///
 /// [concreteorchardkeyagreement]: https://zips.z.cash/protocol/nu5.pdf#concreteorchardkeyagreement
 #[derive(Debug)]
-pub struct EphemeralSecretKey(pub(crate) NonZeroPallasScalar);
+pub struct EphemeralSecretKey(pub NonZeroPallasScalar);
 
 impl ConstantTimeEq for EphemeralSecretKey {
     fn ct_eq(&self, other: &Self) -> subtle::Choice {
@@ -805,15 +805,18 @@ impl ConstantTimeEq for EphemeralSecretKey {
 }
 
 impl EphemeralSecretKey {
-    pub(crate) fn from_bytes(bytes: &[u8; 32]) -> CtOption<Self> {
+    /// Parses an ephemeral secret key from its byte representation.
+    pub fn from_bytes(bytes: &[u8; 32]) -> CtOption<Self> {
         NonZeroPallasScalar::from_bytes(bytes).map(EphemeralSecretKey)
     }
 
-    pub(crate) fn derive_public(&self, g_d: NonIdentityPallasPoint) -> EphemeralPublicKey {
+    /// Derives the corresponding ephemeral public key from a diversified base.
+    pub fn derive_public(&self, g_d: NonIdentityPallasPoint) -> EphemeralPublicKey {
         EphemeralPublicKey(ka_orchard(&self.0, &g_d))
     }
 
-    pub(crate) fn agree(&self, pk_d: &DiversifiedTransmissionKey) -> SharedSecret {
+    /// Performs key agreement with a diversified transmission key.
+    pub fn agree(&self, pk_d: &DiversifiedTransmissionKey) -> SharedSecret {
         SharedSecret(ka_orchard(&self.0, &pk_d.0))
     }
 }
@@ -832,15 +835,18 @@ impl EphemeralSecretKey {
 pub struct EphemeralPublicKey(NonIdentityPallasPoint);
 
 impl EphemeralPublicKey {
-    pub(crate) fn from_bytes(bytes: &[u8; 32]) -> CtOption<Self> {
+    /// Parses an ephemeral public key from its byte representation.
+    pub fn from_bytes(bytes: &[u8; 32]) -> CtOption<Self> {
         NonIdentityPallasPoint::from_bytes(bytes).map(EphemeralPublicKey)
     }
 
-    pub(crate) fn to_bytes(&self) -> EphemeralKeyBytes {
+    /// Serializes this ephemeral public key to bytes.
+    pub fn to_bytes(&self) -> EphemeralKeyBytes {
         EphemeralKeyBytes(self.0.to_bytes())
     }
 
-    pub(crate) fn agree(&self, ivk: &IncomingViewingKey) -> SharedSecret {
+    /// Performs key agreement with an incoming viewing key.
+    pub fn agree(&self, ivk: &IncomingViewingKey) -> SharedSecret {
         SharedSecret(ka_orchard(&ivk.ivk.0, &self.0))
     }
 }
@@ -850,11 +856,13 @@ impl EphemeralPublicKey {
 pub struct PreparedEphemeralPublicKey(PreparedNonIdentityBase);
 
 impl PreparedEphemeralPublicKey {
-    pub(crate) fn new(epk: EphemeralPublicKey) -> Self {
+    /// Prepares an ephemeral public key for trial decryption.
+    pub fn new(epk: EphemeralPublicKey) -> Self {
         PreparedEphemeralPublicKey(PreparedNonIdentityBase::new(epk.0))
     }
 
-    pub(crate) fn agree(&self, ivk: &PreparedIncomingViewingKey) -> SharedSecret {
+    /// Performs key agreement with a prepared incoming viewing key.
+    pub fn agree(&self, ivk: &PreparedIncomingViewingKey) -> SharedSecret {
         SharedSecret(ka_orchard_prepared(&ivk.0, &self.0))
     }
 }
@@ -870,12 +878,12 @@ pub struct SharedSecret(NonIdentityPallasPoint);
 impl SharedSecret {
     /// For checking test vectors only.
     #[cfg(test)]
-    pub(crate) fn to_bytes(&self) -> [u8; 32] {
+    pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
     }
 
     /// Only for use in batched note encryption.
-    pub(crate) fn batch_to_affine(
+    pub fn batch_to_affine(
         shared_secrets: Vec<Option<Self>>,
     ) -> impl Iterator<Item = Option<pallas::Affine>> {
         // Filter out the positions for which ephemeral_key was not a valid encoding.
@@ -898,12 +906,12 @@ impl SharedSecret {
     /// Defined in [Zcash Protocol Spec § 5.4.5.6: Orchard Key Agreement][concreteorchardkdf].
     ///
     /// [concreteorchardkdf]: https://zips.z.cash/protocol/nu5.pdf#concreteorchardkdf
-    pub(crate) fn kdf_orchard(self, ephemeral_key: &EphemeralKeyBytes) -> Blake2bHash {
+    pub fn kdf_orchard(self, ephemeral_key: &EphemeralKeyBytes) -> Blake2bHash {
         Self::kdf_orchard_inner(self.0.to_affine(), ephemeral_key)
     }
 
     /// Only for direct use in batched note encryption.
-    pub(crate) fn kdf_orchard_inner(
+    pub fn kdf_orchard_inner(
         secret: pallas::Affine,
         ephemeral_key: &EphemeralKeyBytes,
     ) -> Blake2bHash {
@@ -955,7 +963,7 @@ pub mod testing {
 
     prop_compose! {
         /// Generate a uniformly distributed Orchard diversifier key.
-        pub(crate) fn arb_diversifier_key()(
+        pub fn arb_diversifier_key()(
             dk_bytes in prop::array::uniform32(prop::num::u8::ANY)
         ) -> DiversifierKey {
             DiversifierKey::from_bytes(dk_bytes)

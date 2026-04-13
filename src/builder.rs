@@ -229,11 +229,16 @@ impl std::error::Error for OutputError {}
 /// Information about a specific note to be spent in an [`Action`].
 #[derive(Debug)]
 pub struct SpendInfo {
-    pub(crate) dummy_sk: Option<SpendingKey>,
-    pub(crate) fvk: FullViewingKey,
-    pub(crate) scope: Scope,
-    pub(crate) note: Note,
-    pub(crate) merkle_path: MerklePath,
+    /// The dummy spending key, if this is a dummy spend.
+    pub dummy_sk: Option<SpendingKey>,
+    /// The full viewing key that owns the note.
+    pub fvk: FullViewingKey,
+    /// The scope of the full viewing key.
+    pub scope: Scope,
+    /// The note to be spent.
+    pub note: Note,
+    /// The Merkle path to the note in the commitment tree.
+    pub merkle_path: MerklePath,
 }
 
 impl SpendInfo {

@@ -2,29 +2,29 @@
 
 use alloc::vec::Vec;
 
-pub(crate) struct TestVector {
-    pub(crate) incoming_viewing_key: [u8; 64],
-    pub(crate) ovk: [u8; 32],
-    pub(crate) default_d: [u8; 11],
-    pub(crate) default_pk_d: [u8; 32],
-    pub(crate) v: u64,
-    pub(crate) rseed: [u8; 32],
-    pub(crate) memo: [u8; 512],
-    pub(crate) cv_net: [u8; 32],
-    pub(crate) nf_old: [u8; 32],
-    pub(crate) cmx: [u8; 32],
-    pub(crate) esk: [u8; 32],
-    pub(crate) ephemeral_key: [u8; 32],
-    pub(crate) shared_secret: [u8; 32],
-    pub(crate) k_enc: [u8; 32],
-    pub(crate) p_enc: [u8; 564],
-    pub(crate) c_enc: [u8; 580],
-    pub(crate) ock: [u8; 32],
-    pub(crate) op: [u8; 64],
-    pub(crate) c_out: [u8; 80],
+pub struct TestVector {
+    pub incoming_viewing_key: [u8; 64],
+    pub ovk: [u8; 32],
+    pub default_d: [u8; 11],
+    pub default_pk_d: [u8; 32],
+    pub v: u64,
+    pub rseed: [u8; 32],
+    pub memo: [u8; 512],
+    pub cv_net: [u8; 32],
+    pub nf_old: [u8; 32],
+    pub cmx: [u8; 32],
+    pub esk: [u8; 32],
+    pub ephemeral_key: [u8; 32],
+    pub shared_secret: [u8; 32],
+    pub k_enc: [u8; 32],
+    pub p_enc: [u8; 564],
+    pub c_enc: [u8; 580],
+    pub ock: [u8; 32],
+    pub op: [u8; 64],
+    pub c_out: [u8; 80],
 }
 
-pub(crate) fn test_vectors() -> Vec<TestVector> {
+pub fn test_vectors() -> Vec<TestVector> {
     // From https://github.com/zcash-hackworks/zcash-test-vectors/blob/master/orchard_note_encryption.py
     vec![
         TestVector {

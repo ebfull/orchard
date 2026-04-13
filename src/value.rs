@@ -82,15 +82,18 @@ impl NoteValue {
         NoteValue(value)
     }
 
-    pub(crate) fn from_bytes(bytes: [u8; 8]) -> Self {
+    /// Deserializes a note value from little-endian bytes.
+    pub fn from_bytes(bytes: [u8; 8]) -> Self {
         NoteValue(u64::from_le_bytes(bytes))
     }
 
-    pub(crate) fn to_bytes(self) -> [u8; 8] {
+    /// Serializes this note value to little-endian bytes.
+    pub fn to_bytes(self) -> [u8; 8] {
         self.0.to_le_bytes()
     }
 
-    pub(crate) fn to_le_bits(self) -> BitArray<[u8; 8], Lsb0> {
+    /// Returns the little-endian bit representation of this note value.
+    pub fn to_le_bits(self) -> BitArray<[u8; 8], Lsb0> {
         BitArray::<_, Lsb0>::new(self.0.to_le_bytes())
     }
 }
@@ -130,7 +133,8 @@ pub enum Sign {
 pub struct ValueSum(i128);
 
 impl ValueSum {
-    pub(crate) fn zero() -> Self {
+    /// Returns a zero value sum.
+    pub fn zero() -> Self {
         // Default for i128 is zero.
         Default::default()
     }
@@ -141,12 +145,12 @@ impl ValueSum {
     /// in `Bundle::binding_validating_key`, where we are converting from the user-defined
     /// `valueBalance` type that enforces any additional constraints on the value's valid
     /// range.
-    pub(crate) fn from_raw(value: i64) -> Self {
+    pub fn from_raw(value: i64) -> Self {
         ValueSum(value as i128)
     }
 
     /// Constructs a value sum from its magnitude and sign.
-    pub(crate) fn from_magnitude_sign(magnitude: u64, sign: Sign) -> Self {
+    pub fn from_magnitude_sign(magnitude: u64, sign: Sign) -> Self {
         Self(match sign {
             Sign::Positive => magnitude as i128,
             Sign::Negative => -(magnitude as i128),
@@ -214,7 +218,8 @@ impl TryFrom<ValueSum> for i64 {
 pub struct ValueCommitTrapdoor(pallas::Scalar);
 
 impl ValueCommitTrapdoor {
-    pub(crate) fn inner(&self) -> pallas::Scalar {
+    /// Returns the inner scalar value.
+    pub fn inner(&self) -> pallas::Scalar {
         self.0
     }
 
@@ -261,16 +266,17 @@ impl<'a> Sum<&'a ValueCommitTrapdoor> for ValueCommitTrapdoor {
 
 impl ValueCommitTrapdoor {
     /// Generates a new value commitment trapdoor.
-    pub(crate) fn random(rng: impl RngCore) -> Self {
+    pub fn random(rng: impl RngCore) -> Self {
         ValueCommitTrapdoor(pallas::Scalar::random(rng))
     }
 
     /// Returns the zero trapdoor, which provides no blinding.
-    pub(crate) fn zero() -> Self {
+    pub fn zero() -> Self {
         ValueCommitTrapdoor(pallas::Scalar::zero())
     }
 
-    pub(crate) fn into_bsk(self) -> redpallas::SigningKey<Binding> {
+    /// Converts this trapdoor into a RedPallas binding signing key.
+    pub fn into_bsk(self) -> redpallas::SigningKey<Binding> {
         // TODO: impl From<pallas::Scalar> for redpallas::SigningKey.
         self.0.to_repr().try_into().unwrap()
     }
@@ -334,7 +340,8 @@ impl ValueCommitment {
         ValueCommitment(V * value + R * rcv.0)
     }
 
-    pub(crate) fn into_bvk(self) -> redpallas::VerificationKey<Binding> {
+    /// Converts this commitment into a RedPallas binding verification key.
+    pub fn into_bvk(self) -> redpallas::VerificationKey<Binding> {
         // TODO: impl From<pallas::Point> for redpallas::VerificationKey.
         self.0.to_bytes().try_into().unwrap()
     }
@@ -350,7 +357,7 @@ impl ValueCommitment {
     }
 
     /// x-coordinate of this value commitment.
-    pub(crate) fn x(&self) -> pallas::Base {
+    pub fn x(&self) -> pallas::Base {
         if self.0 == pallas::Point::identity() {
             pallas::Base::zero()
         } else {
@@ -359,7 +366,7 @@ impl ValueCommitment {
     }
 
     /// y-coordinate of this value commitment.
-    pub(crate) fn y(&self) -> pallas::Base {
+    pub fn y(&self) -> pallas::Base {
         if self.0 == pallas::Point::identity() {
             pallas::Base::zero()
         } else {

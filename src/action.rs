@@ -121,7 +121,7 @@ impl DynamicUsage for Action<redpallas::Signature<SpendAuth>> {
 /// Generators for property testing.
 #[cfg(any(test, feature = "test-dependencies"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "test-dependencies")))]
-pub(crate) mod testing {
+pub mod testing {
     use rand::{rngs::StdRng, SeedableRng};
     use reddsa::orchard::SpendAuth;
 

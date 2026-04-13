@@ -27,7 +27,8 @@ use subtle::{Choice, ConditionallySelectable, CtOption};
 // <https://zips.z.cash/protocol/protocol.pdf#thmuncommittedorchard>
 lazy_static! {
     static ref UNCOMMITTED_ORCHARD: pallas::Base = pallas::Base::from(2);
-    pub(crate) static ref EMPTY_ROOTS: Vec<MerkleHashOrchard> = {
+    /// Pre-computed empty roots for each level of the Orchard note commitment tree.
+    pub static ref EMPTY_ROOTS: Vec<MerkleHashOrchard> = {
         iter::empty()
             .chain(Some(MerkleHashOrchard::empty_leaf()))
             .chain(
@@ -69,7 +70,7 @@ impl Anchor {
     }
 
     /// Returns the inner base field element.
-    pub(crate) fn inner(&self) -> pallas::Base {
+    pub fn inner(&self) -> pallas::Base {
         self.0
     }
 
@@ -126,7 +127,7 @@ impl MerklePath {
     }
 
     /// Instantiates a new Merkle path given a leaf position and authentication path.
-    pub(crate) fn new(position: u32, auth_path: [pallas::Base; MERKLE_DEPTH_ORCHARD]) -> Self {
+    pub fn new(position: u32, auth_path: [pallas::Base; MERKLE_DEPTH_ORCHARD]) -> Self {
         Self::from_parts(position, auth_path.map(MerkleHashOrchard))
     }
 

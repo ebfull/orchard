@@ -23,7 +23,8 @@ pub struct Address {
 }
 
 impl Address {
-    pub(crate) fn from_parts(d: Diversifier, pk_d: DiversifiedTransmissionKey) -> Self {
+    /// Constructs an [`Address`] from a diversifier and a diversified transmission key.
+    pub fn from_parts(d: Diversifier, pk_d: DiversifiedTransmissionKey) -> Self {
         // We assume here that pk_d is correctly-derived from d. We ensure this for
         // internal APIs. For parsing from raw byte encodings, we assume that users aren't
         // modifying internals of encoded address formats. If they do, that can result in
@@ -82,7 +83,7 @@ pub mod testing {
 
     prop_compose! {
         /// Generates an arbitrary payment address.
-        pub(crate) fn arb_address()(sk in arb_spending_key(), j in arb_diversifier_index()) -> Address {
+        pub fn arb_address()(sk in arb_spending_key(), j in arb_diversifier_index()) -> Address {
             let fvk = FullViewingKey::from(&sk);
             fvk.address_at(j, Scope::External)
         }

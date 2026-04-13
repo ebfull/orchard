@@ -1,8 +1,8 @@
-pub(crate) struct TestVector {
+pub struct TestVector {
     pub empty_roots: [[u8; 32]; 33],
 }
 
-pub(crate) fn test_vectors() -> TestVector {
+pub fn test_vectors() -> TestVector {
     // From https://github.com/zcash-hackworks/zcash-test-vectors/blob/master/orchard_empty_roots.py
     TestVector {
         empty_roots: [

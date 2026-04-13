@@ -67,7 +67,8 @@ impl Rho {
 pub struct RandomSeed([u8; 32]);
 
 impl RandomSeed {
-    pub(crate) fn random(rng: &mut impl RngCore, rho: &Rho) -> Self {
+    /// Generates a random seed for a note, retrying until a valid one is found.
+    pub fn random(rng: &mut impl RngCore, rho: &Rho) -> Self {
         loop {
             let mut bytes = [0; 32];
             rng.fill_bytes(&mut bytes);
@@ -236,7 +237,7 @@ impl Note {
     }
 
     /// Derives the ephemeral secret key for this note.
-    pub(crate) fn esk(&self) -> EphemeralSecretKey {
+    pub fn esk(&self) -> EphemeralSecretKey {
         EphemeralSecretKey(self.rseed.esk(&self.rho))
     }
 
@@ -324,7 +325,7 @@ pub mod testing {
 
     prop_compose! {
         /// Generate an arbitrary random seed
-        pub(crate) fn arb_rseed()(elems in prop::array::uniform32(prop::num::u8::ANY)) -> RandomSeed {
+        pub fn arb_rseed()(elems in prop::array::uniform32(prop::num::u8::ANY)) -> RandomSeed {
             RandomSeed(elems)
         }
     }

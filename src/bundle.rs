@@ -74,7 +74,7 @@ const FLAGS_EXPECTED_UNSET: u8 = !(FLAG_SPENDS_ENABLED | FLAG_OUTPUTS_ENABLED);
 
 impl Flags {
     /// Construct a set of flags from its constituent parts
-    pub(crate) const fn from_parts(spends_enabled: bool, outputs_enabled: bool) -> Self {
+    pub const fn from_parts(spends_enabled: bool, outputs_enabled: bool) -> Self {
         Flags {
             spends_enabled,
             outputs_enabled,
@@ -298,8 +298,9 @@ impl<T: Authorization, V> Bundle<T, V> {
         })
     }
 
+    /// Returns the circuit instances for each action in this bundle.
     #[cfg(feature = "circuit")]
-    pub(crate) fn to_instances(&self) -> Vec<Instance> {
+    pub fn to_instances(&self) -> Vec<Instance> {
         self.actions
             .iter()
             .map(|a| a.to_instance(self.flags, self.anchor))

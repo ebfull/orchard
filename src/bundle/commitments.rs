@@ -27,7 +27,7 @@ fn hasher(personal: &[u8; 16]) -> State {
 /// personalized with ZCASH_ORCHARD_ACTIONS_HASH_PERSONALIZATION
 ///
 /// [zip244]: https://zips.z.cash/zip-0244
-pub(crate) fn hash_bundle_txid_data<A: Authorization, V: Copy + Into<i64>>(
+pub fn hash_bundle_txid_data<A: Authorization, V: Copy + Into<i64>>(
     bundle: &Bundle<A, V>,
 ) -> Blake2bHash {
     let mut h = hasher(ZCASH_ORCHARD_HASH_PERSONALIZATION);
@@ -71,7 +71,7 @@ pub fn hash_bundle_txid_empty() -> Blake2bHash {
 /// Identifier Non-Malleability][zip244]
 ///
 /// [zip244]: https://zips.z.cash/zip-0244
-pub(crate) fn hash_bundle_auth_data<V>(bundle: &Bundle<Authorized, V>) -> Blake2bHash {
+pub fn hash_bundle_auth_data<V>(bundle: &Bundle<Authorized, V>) -> Blake2bHash {
     let mut h = hasher(ZCASH_ORCHARD_SIGS_HASH_PERSONALIZATION);
     h.update(bundle.authorization().proof().as_ref());
     for action in bundle.actions().iter() {

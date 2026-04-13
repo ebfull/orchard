@@ -23,7 +23,7 @@ pub const INV_TWO_POW_K: [u8; 32] = [
 pub const C: usize = 253;
 
 /// $\ell^\mathsf{Orchard}_\mathsf{Merkle}$
-pub(crate) const L_ORCHARD_MERKLE: usize = 255;
+pub const L_ORCHARD_MERKLE: usize = 255;
 
 /// SWU hash-to-curve personalization for the Merkle CRH generator
 pub const MERKLE_CRH_PERSONALIZATION: &str = "z.cash:Orchard-MerkleCRH";
@@ -64,7 +64,7 @@ pub const Q_MERKLE_CRH: ([u8; 32], [u8; 32]) = (
     ],
 );
 
-pub(crate) fn lebs2ip_k(bits: &[bool]) -> u32 {
+pub fn lebs2ip_k(bits: &[bool]) -> u32 {
     assert!(bits.len() == K);
     bits.iter()
         .enumerate()
@@ -73,7 +73,7 @@ pub(crate) fn lebs2ip_k(bits: &[bool]) -> u32 {
 
 /// The sequence of K bits in little-endian order representing an integer
 /// up to `2^K` - 1.
-pub(crate) fn i2lebsp_k(int: usize) -> [bool; K] {
+pub fn i2lebsp_k(int: usize) -> [bool; K] {
     assert!(int < (1 << K));
     i2lebsp(int as u64)
 }

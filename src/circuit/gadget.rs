@@ -28,51 +28,61 @@ use halo2_proofs::{
 pub mod add_chip;
 
 impl super::Config {
-    pub(super) fn add_chip(&self) -> add_chip::AddChip {
+    /// Constructs the addition chip.
+    pub fn add_chip(&self) -> add_chip::AddChip {
         add_chip::AddChip::construct(self.add_config.clone())
     }
 
-    pub(super) fn commit_ivk_chip(&self) -> CommitIvkChip {
+    /// Constructs the CommitIvk chip.
+    pub fn commit_ivk_chip(&self) -> CommitIvkChip {
         CommitIvkChip::construct(self.commit_ivk_config.clone())
     }
 
-    pub(super) fn ecc_chip(&self) -> EccChip<OrchardFixedBases> {
+    /// Constructs the ECC chip.
+    pub fn ecc_chip(&self) -> EccChip<OrchardFixedBases> {
         EccChip::construct(self.ecc_config.clone())
     }
 
-    pub(super) fn sinsemilla_chip_1(
+    /// Constructs the first Sinsemilla chip.
+    pub fn sinsemilla_chip_1(
         &self,
     ) -> SinsemillaChip<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases> {
         SinsemillaChip::construct(self.sinsemilla_config_1.clone())
     }
 
-    pub(super) fn sinsemilla_chip_2(
+    /// Constructs the second Sinsemilla chip.
+    pub fn sinsemilla_chip_2(
         &self,
     ) -> SinsemillaChip<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases> {
         SinsemillaChip::construct(self.sinsemilla_config_2.clone())
     }
 
-    pub(super) fn merkle_chip_1(
+    /// Constructs the first Merkle chip.
+    pub fn merkle_chip_1(
         &self,
     ) -> MerkleChip<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases> {
         MerkleChip::construct(self.merkle_config_1.clone())
     }
 
-    pub(super) fn merkle_chip_2(
+    /// Constructs the second Merkle chip.
+    pub fn merkle_chip_2(
         &self,
     ) -> MerkleChip<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases> {
         MerkleChip::construct(self.merkle_config_2.clone())
     }
 
-    pub(super) fn poseidon_chip(&self) -> PoseidonChip<pallas::Base, 3, 2> {
+    /// Constructs the Poseidon chip.
+    pub fn poseidon_chip(&self) -> PoseidonChip<pallas::Base, 3, 2> {
         PoseidonChip::construct(self.poseidon_config.clone())
     }
 
-    pub(super) fn note_commit_chip_new(&self) -> NoteCommitChip {
+    /// Constructs the NoteCommit chip for the new note.
+    pub fn note_commit_chip_new(&self) -> NoteCommitChip {
         NoteCommitChip::construct(self.new_note_commit_config.clone())
     }
 
-    pub(super) fn note_commit_chip_old(&self) -> NoteCommitChip {
+    /// Constructs the NoteCommit chip for the old note.
+    pub fn note_commit_chip_old(&self) -> NoteCommitChip {
         NoteCommitChip::construct(self.old_note_commit_config.clone())
     }
 }

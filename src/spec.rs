@@ -243,10 +243,7 @@ pub fn prf_nf(nk: pallas::Base, rho: pallas::Base) -> pallas::Base {
 /// Defined in [Zcash Protocol Spec § 5.4.5.5: Orchard Key Agreement][concreteorchardkeyagreement].
 ///
 /// [concreteorchardkeyagreement]: https://zips.z.cash/protocol/nu5.pdf#concreteorchardkeyagreement
-pub fn ka_orchard(
-    sk: &NonZeroPallasScalar,
-    b: &NonIdentityPallasPoint,
-) -> NonIdentityPallasPoint {
+pub fn ka_orchard(sk: &NonZeroPallasScalar, b: &NonIdentityPallasPoint) -> NonIdentityPallasPoint {
     ka_orchard_prepared(
         &PreparedNonZeroScalar::new(sk),
         &PreparedNonIdentityBase::new(*b),

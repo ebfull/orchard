@@ -93,6 +93,18 @@ pub mod circuit {
     pub mod gadget {}
 }
 
+/// Orchard protocol constants, including fixed-base scalar multiplication
+/// parameters.
+#[cfg(feature = "circuit")]
+#[cfg_attr(docsrs, doc(cfg(feature = "circuit")))]
+pub mod constants {
+    #[doc(inline)]
+    pub use __impl::constants::{
+        NullifierK, OrchardBaseFieldBases, OrchardFixedBases, OrchardFixedBasesFull,
+        OrchardShortScalarBases, ValueCommitV,
+    };
+}
+
 /// Key structures for Orchard.
 pub mod keys {
     #[doc(inline)]

@@ -7,12 +7,35 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+### Added
+- `orchard::constants` — new module re-exporting fixed-base scalar multiplication
+  types from `orchard_internal::constants`. Previously-internal types now
+  reachable through the public crate: `NullifierK`, `OrchardFixedBases`,
+  `OrchardFixedBasesFull`, `ValueCommitV`.
+- `orchard::constants::OrchardBaseFieldBases` — enum wrapping fixed-base points
+  that can be multiplied by a base-field scalar, with variants:
+  - `NullifierK` (existing generator, repackaged as an enum variant)
+  - `SpendAuthGBase` (SpendAuthG with the existing 85-window tables, enabling
+    `FixedPointBaseField::mul` for base-field scalars)
+- `orchard::constants::OrchardShortScalarBases` — enum wrapping fixed-base points
+  that can be multiplied by a short (64-bit) signed scalar, with variants:
+  - `ValueCommitV` (existing generator, repackaged as an enum variant)
+  - `SpendAuthGShort` (SpendAuthG with new 22-window precomputed tables,
+    enabling `FixedPointShort::mul` for short signed scalars)
+
 ### Changed
 - MSRV is now 1.85.1
 - Migrated from yanked `core2` library to `corez`
 - `orchard::pczt::Bundle::extract` now takes its `self` argument by
   reference instead of by value.
 - `orchard::zip32::Error` has added variant `MaxDerivationDepth`
+- **Breaking:** `orchard::constants::OrchardFixedBases` variants `NullifierK` and
+  `ValueCommitV` have been replaced with `Base(OrchardBaseFieldBases)` and
+  `Short(OrchardShortScalarBases)` respectively. The existing
+  `impl From<NullifierK> for OrchardFixedBases` and
+  `impl From<ValueCommitV> for OrchardFixedBases` conversions continue to work,
+  so callers using `.into()` are unaffected; only callers that match on the enum
+  variants directly need to update.
 
 ## [0.12.0] - 2025-12-05
 

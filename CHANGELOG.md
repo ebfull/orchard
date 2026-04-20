@@ -29,13 +29,6 @@ and this project adheres to Rust's notion of
 - `orchard::pczt::Bundle::extract` now takes its `self` argument by
   reference instead of by value.
 - `orchard::zip32::Error` has added variant `MaxDerivationDepth`
-- **Breaking:** `orchard::constants::OrchardFixedBases` variants `NullifierK` and
-  `ValueCommitV` have been replaced with `Base(OrchardBaseFieldBases)` and
-  `Short(OrchardShortScalarBases)` respectively. The existing
-  `impl From<NullifierK> for OrchardFixedBases` and
-  `impl From<ValueCommitV> for OrchardFixedBases` conversions continue to work,
-  so callers using `.into()` are unaffected; only callers that match on the enum
-  variants directly need to update.
 
 ## [0.12.0] - 2025-12-05
 

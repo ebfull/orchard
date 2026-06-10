@@ -95,6 +95,7 @@ impl super::Bundle {
                     action.output.cmx,
                     self.flags.spends_enabled(),
                     self.flags.outputs_enabled(),
+                    self.flags.cross_address_disabled(),
                 )
                 .ok_or(ProverError::IdentityRk)
             })

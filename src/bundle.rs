@@ -47,6 +47,7 @@ impl<T> Action<T> {
             *self.cmx(),
             flags.spends_enabled,
             flags.outputs_enabled,
+            flags.cross_address_disabled,
         )
         .expect("this Action's rk is non-identity by construction (Action::from_parts)")
     }

@@ -25,6 +25,10 @@ struct BundleSignature {
 pub struct BatchValidator {
     proofs: plonk::BatchVerifier<vesta::Affine>,
     signatures: Vec<BundleSignature>,
+    /// Whether any queued instance disables cross-address transfers. Such statements can
+    /// only be validated with a verifying key whose circuit version constrains the
+    /// `disableCrossAddress` public input; the key is not known until [`Self::validate`].
+    restricted: bool,
 }
 
 impl BatchValidator {
@@ -33,6 +37,7 @@ impl BatchValidator {
         BatchValidator {
             proofs: plonk::BatchVerifier::new(),
             signatures: vec![],
+            restricted: false,
         }
     }
 
@@ -56,10 +61,12 @@ impl BatchValidator {
                 .create_batch_item(bundle.authorization().binding_signature().clone(), &sighash),
         });
 
+        let instances = bundle.to_instances();
+        self.restricted |= instances.iter().any(|i| i.disable_cross_address());
         bundle
             .authorization()
             .proof()
-            .add_to_batch(&mut self.proofs, bundle.to_instances());
+            .add_to_batch(&mut self.proofs, instances);
     }
 
     /// Batch-validates the accumulated bundles.
@@ -76,6 +83,15 @@ impl BatchValidator {
             // Note that a transaction has at least a binding signature, so if
             // there are no signatures, there are also no proofs.
             return true;
+        }
+
+        if self.restricted && !vk.circuit_version().supports_cross_address_restriction() {
+            // This key's circuit version leaves the disableCrossAddress public input
+            // unconstrained, so it cannot enforce the restriction these statements
+            // claim: a freshly created proof for the unrestricted circuit would satisfy
+            // them.
+            debug!("Batch contains statements this verifying key cannot enforce");
+            return false;
         }
 
         let mut validator = redpallas::batch::Verifier::new();

@@ -12,7 +12,11 @@ impl super::Action {
     ///
     /// It is the caller's responsibility to perform any semantic validity checks on the
     /// PCZT (for example, comfirming that the change amounts are correct) before calling
-    /// this method.
+    /// this method. In particular, for a bundle that disables cross-address transfers,
+    /// callers should first verify the restriction with
+    /// [`Bundle::verify_cross_address_restriction`].
+    ///
+    /// [`Bundle::verify_cross_address_restriction`]: super::Bundle::verify_cross_address_restriction
     pub fn sign<R: RngCore + CryptoRng>(
         &mut self,
         sighash: [u8; 32],

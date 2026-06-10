@@ -14,6 +14,12 @@ use crate::{
 
 impl super::Bundle {
     /// Adds a proof to this PCZT bundle.
+    ///
+    /// The Action circuits are built for `pk`'s circuit version (the caller selects the
+    /// proving key matching the transaction format the PCZT targets). If the bundle
+    /// disables cross-address transfers, the circuit version must constrain the
+    /// `disableCrossAddress` flag, and every action must output to the address it spends
+    /// from.
     pub fn create_proof<R: RngCore + CryptoRng>(
         &mut self,
         pk: &ProvingKey,
@@ -24,6 +30,35 @@ impl super::Bundle {
         // bundle that doesn't even hold a proof field).
         if self.actions.is_empty() {
             return Ok(());
+        }
+
+        let circuit_version = pk.circuit_version();
+
+        if self.flags.cross_address_disabled() {
+            // A restricted statement can only be proven for a circuit version that
+            // constrains the disableCrossAddress flag; the proof would otherwise not
+            // enforce what the bundle claims.
+            if !circuit_version.supports_cross_address_restriction() {
+                return Err(ProverError::CircuitVersionMismatch);
+            }
+
+            // Check the restriction structurally before synthesizing any circuit, for a
+            // clear error instead of an unsatisfiable-constraint failure. Address
+            // equality compares (d, pk_d); equal diversifiers produce equal g_d, so this
+            // is at least as strict as the circuit's (g_d, pk_d) checks.
+            for action in &self.actions {
+                let spend_recipient = action
+                    .spend
+                    .recipient
+                    .ok_or(ProverError::MissingRecipient)?;
+                let output_recipient = action
+                    .output
+                    .recipient
+                    .ok_or(ProverError::MissingRecipient)?;
+                if spend_recipient != output_recipient {
+                    return Err(ProverError::DisallowedCrossAddressTransfer);
+                }
+            }
         }
 
         let circuits = self
@@ -78,8 +113,14 @@ impl super::Bundle {
                     .clone()
                     .ok_or(ProverError::MissingValueCommitTrapdoor)?;
 
-                Circuit::from_action_context(spend, output_note, alpha, rcv)
-                    .ok_or(ProverError::RhoMismatch)
+                Circuit::from_action_context_for_version(
+                    spend,
+                    output_note,
+                    alpha,
+                    rcv,
+                    circuit_version,
+                )
+                .ok_or(ProverError::RhoMismatch)
             })
             .collect::<Result<Vec<_>, ProverError>>()?;
 
@@ -114,6 +155,12 @@ impl super::Bundle {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ProverError {
+    /// The bundle disables cross-address transfers, which the proving key's circuit
+    /// version does not constrain.
+    CircuitVersionMismatch,
+    /// An action's output is addressed differently than its spent note, but the bundle
+    /// disables cross-address transfers.
+    DisallowedCrossAddressTransfer,
     /// The output note's components do not produce a valid note commitment.
     InvalidOutputNote,
     /// The spent note's components do not produce a valid note commitment.
@@ -148,6 +195,16 @@ pub enum ProverError {
 impl fmt::Display for ProverError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            ProverError::CircuitVersionMismatch => write!(
+                f,
+                "the bundle disables cross-address transfers, which requires a circuit \
+                 version that constrains the disableCrossAddress flag"
+            ),
+            ProverError::DisallowedCrossAddressTransfer => write!(
+                f,
+                "an action outputs to a different address than it spends, but the \
+                 bundle disables cross-address transfers"
+            ),
             ProverError::InvalidOutputNote => write!(f, "output note is invalid"),
             ProverError::InvalidSpendNote => write!(f, "spent note is invalid"),
             ProverError::MissingFullViewingKey => {

@@ -7,6 +7,38 @@ use crate::{
     Note,
 };
 
+impl super::Bundle {
+    /// If this bundle disables cross-address transfers, verifies that every action's
+    /// output is addressed to the same `(g_d, pk_d)` as its spent note. This is a no-op
+    /// for bundles that permit cross-address transfers.
+    ///
+    /// When the restriction applies, this requires `spend.recipient` and
+    /// `output.recipient` to be set on every action. Signers presented with such a
+    /// bundle should call this before signing; after proofs are created, the
+    /// restriction is enforced by the proof itself.
+    pub fn verify_cross_address_restriction(&self) -> Result<(), VerifyError> {
+        if self.flags.cross_address_disabled() {
+            for action in &self.actions {
+                let spend_recipient = action
+                    .spend
+                    .recipient
+                    .ok_or(VerifyError::MissingRecipient)?;
+                let output_recipient = action
+                    .output
+                    .recipient
+                    .ok_or(VerifyError::MissingRecipient)?;
+                // Address equality compares (d, pk_d); equal diversifiers produce equal
+                // g_d, so this is at least as strict as the circuit's (g_d, pk_d) checks.
+                if spend_recipient != output_recipient {
+                    return Err(VerifyError::DisallowedCrossAddressTransfer);
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl super::Action {
     /// Verifies that the `cv_net` field is consistent with the note fields.
     ///
@@ -147,6 +179,9 @@ impl super::Output {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum VerifyError {
+    /// An action's output is addressed differently than its spent note, but the bundle
+    /// disables cross-address transfers.
+    DisallowedCrossAddressTransfer,
     /// The output note's components do not produce the expected `cmx`.
     InvalidExtractedNoteCommitment,
     /// The spent note's components do not produce the expected `nullifier`.
@@ -182,6 +217,11 @@ pub enum VerifyError {
 impl fmt::Display for VerifyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            VerifyError::DisallowedCrossAddressTransfer => write!(
+                f,
+                "an action outputs to a different address than it spends, but the \
+                 bundle disables cross-address transfers"
+            ),
             VerifyError::InvalidExtractedNoteCommitment => {
                 write!(f, "output note doesn't match `cmx`")
             }

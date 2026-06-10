@@ -12,7 +12,7 @@ use zip32::ChildIndex;
 
 use super::{Action, Bundle, Output, Spend, Zip32Derivation};
 use crate::{
-    bundle::Flags,
+    bundle::{BundleFormat, Flags},
     keys::{FullViewingKey, SpendingKey},
     note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho, TransmittedNoteCiphertext},
     primitives::redpallas::{self, SpendAuth},
@@ -23,16 +23,24 @@ use crate::{
 
 impl Bundle {
     /// Parses a PCZT bundle from its component parts.
-    /// `value_sum` is represented as `(magnitude, is_negative)`.
+    ///
+    /// `format` is the transaction-format generation the PCZT's transaction targets
+    /// (derived from its global transaction version); it determines how the `flags` byte
+    /// is interpreted. `value_sum` is represented as `(magnitude, is_negative)`.
     pub fn parse(
         actions: Vec<Action>,
         flags: u8,
+        format: BundleFormat,
         value_sum: (u64, bool),
         anchor: [u8; 32],
         zkproof: Option<Vec<u8>>,
         bsk: Option<[u8; 32]>,
     ) -> Result<Self, ParseError> {
-        let flags = Flags::from_byte(flags).ok_or(ParseError::UnexpectedFlagBitsSet)?;
+        let flags = match format {
+            BundleFormat::PreIronwood => Flags::from_byte(flags),
+            BundleFormat::Ironwood => Flags::from_byte_ironwood(flags),
+        }
+        .ok_or(ParseError::UnexpectedFlagBitsSet)?;
 
         let value_sum = {
             let (magnitude, is_negative) = value_sum;
@@ -335,6 +343,10 @@ pub enum ParseError {
     /// `rho` must be provided whenever `rseed` is provided.
     MissingRho,
     /// The provided `flags` field had unexpected bits set.
+    ///
+    /// Which bits are expected depends on the bundle's [`BundleFormat`]: the
+    /// `disableCrossAddress` bit is a reserved zero bit in pre-Ironwood transaction
+    /// formats.
     UnexpectedFlagBitsSet,
 }
 

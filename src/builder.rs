@@ -77,13 +77,21 @@ impl BundleType {
         num_spends: usize,
         num_outputs: usize,
     ) -> Result<usize, &'static str> {
-        let num_requested_actions = core::cmp::max(num_spends, num_outputs);
-
         match self {
             BundleType::Transactional {
                 flags,
                 bundle_required,
             } => {
+                // When cross-address transfers are disabled, every action's output is
+                // addressed to the note it spends, so a requested spend and a requested
+                // output can never share an action: each is paired with a fabricated
+                // zero-value counterpart instead.
+                let num_requested_actions = if flags.cross_address_disabled() {
+                    num_spends + num_outputs
+                } else {
+                    core::cmp::max(num_spends, num_outputs)
+                };
+
                 if !flags.spends_enabled() && num_spends > 0 {
                     Err("Spends are disabled, so num_spends must be zero")
                 } else if !flags.outputs_enabled() && num_outputs > 0 {
@@ -140,6 +148,12 @@ pub enum BuildError {
     DuplicateSignature,
     /// The bundle being constructed violated the construction rules for the requested bundle type.
     BundleTypeNotSatisfiable,
+    /// The bundle's flags require a circuit version that the bundle was not built for.
+    #[cfg(feature = "circuit")]
+    CircuitVersionMismatch,
+    /// Cross-address transfers are disabled for the bundle being constructed, and an
+    /// output is not a wallet-controlled change output.
+    CrossAddressDisabled,
 }
 
 impl fmt::Display for BuildError {
@@ -160,6 +174,15 @@ impl fmt::Display for BuildError {
             AnchorMismatch => {
                 f.write_str("All spends must share the anchor requested for the transaction.")
             }
+            #[cfg(feature = "circuit")]
+            CircuitVersionMismatch => f.write_str(
+                "The bundle disables cross-address transfers, which requires a circuit \
+                 version that constrains the disableCrossAddress flag.",
+            ),
+            CrossAddressDisabled => f.write_str(
+                "Cross-address transfers are disabled for this bundle: every output must \
+                 be a wallet-controlled change output.",
+            ),
         }
     }
 }
@@ -212,6 +235,11 @@ impl std::error::Error for SpendError {}
 pub enum OutputError {
     /// Outputs aren't enabled for this builder.
     OutputsDisabled,
+    /// Cross-address transfers are disabled for this builder, so ordinary outputs cannot
+    /// be added; use [`Builder::add_change_output`] for wallet-controlled change.
+    CrossAddressDisabled,
+    /// The full viewing key provided does not own the recipient address.
+    FvkMismatch,
 }
 
 impl fmt::Display for OutputError {
@@ -219,6 +247,11 @@ impl fmt::Display for OutputError {
         use OutputError::*;
         f.write_str(match self {
             OutputsDisabled => "Outputs are not enabled for this builder",
+            CrossAddressDisabled => {
+                "Cross-address transfers are disabled for this builder; use \
+                 add_change_output for wallet-controlled change"
+            }
+            FvkMismatch => "FullViewingKey does not own the recipient address",
         })
     }
 }
@@ -335,6 +368,11 @@ pub struct OutputInfo {
     recipient: Address,
     value: NoteValue,
     memo: [u8; 512],
+    /// For wallet-controlled change outputs: the full viewing key that owns `recipient`,
+    /// and the scope it owns it under. This enables the builder to fabricate the paired
+    /// zero-value spend in bundles that disable cross-address transfers. `None` for
+    /// ordinary outputs.
+    change_fvk: Option<(FullViewingKey, Scope)>,
 }
 
 impl OutputInfo {
@@ -350,7 +388,33 @@ impl OutputInfo {
             recipient,
             value,
             memo,
+            change_fvk: None,
         }
+    }
+
+    /// Constructs a wallet-controlled change output.
+    ///
+    /// In a bundle that disables cross-address transfers, the builder pairs this output
+    /// with a fabricated zero-value spend controlled by `fvk` at `recipient`, in the
+    /// same action; this is the only way to retain shielded value in such a bundle. In
+    /// other bundles it behaves exactly like [`OutputInfo::new`].
+    ///
+    /// Returns `None` if `fvk` does not own `recipient`.
+    pub fn change(
+        fvk: FullViewingKey,
+        ovk: Option<OutgoingViewingKey>,
+        recipient: Address,
+        value: NoteValue,
+        memo: [u8; 512],
+    ) -> Option<Self> {
+        let scope = fvk.scope_for_address(&recipient)?;
+        Some(Self {
+            ovk,
+            recipient,
+            value,
+            memo,
+            change_fvk: Some((fvk, scope)),
+        })
     }
 
     /// Defined in [Zcash Protocol Spec § 4.8.3: Dummy Notes (Orchard)][orcharddummynotes].
@@ -543,19 +607,24 @@ impl BundleMetadata {
     /// For the purpose of improving indistinguishability, actions are padded and note
     /// positions are randomized when building bundles. This means that the bundle
     /// consumer cannot assume that e.g. the first spend they added corresponds to the
-    /// first action in the bundle.
+    /// first action in the bundle. In a bundle that disables cross-address transfers,
+    /// each spend's action contains a fabricated zero-value output (to the spent note's
+    /// own address), so no requested output shares the returned action index.
     pub fn spend_action_index(&self, n: usize) -> Option<usize> {
         self.spend_indices.get(n).copied()
     }
 
     /// Returns the index within the bundle of the [`Action`] corresponding to the `n`-th
     /// output specified in bundle construction. If a [`Builder`] was used, this refers to
-    /// the output added by the `n`-th call to [`Builder::add_output`].
+    /// the output added by the `n`-th call to [`Builder::add_output`] or
+    /// [`Builder::add_change_output`].
     ///
     /// For the purpose of improving indistinguishability, actions are padded and note
     /// positions are randomized when building bundles. This means that the bundle
     /// consumer cannot assume that e.g. the first output they added corresponds to the
-    /// first action in the bundle.
+    /// first action in the bundle. In a bundle that disables cross-address transfers,
+    /// each output's action contains a fabricated wallet-controlled zero-value spend (at
+    /// the change address), so no requested spend shares the returned action index.
     pub fn output_action_index(&self, n: usize) -> Option<usize> {
         self.output_indices.get(n).copied()
     }
@@ -661,6 +730,10 @@ impl Builder {
     }
 
     /// Adds an address which will receive funds in this transaction.
+    ///
+    /// In a bundle that disables cross-address transfers, ordinary outputs cannot be
+    /// constructed (each action's output is addressed to the note it spends); retained
+    /// value must be added with [`Builder::add_change_output`] instead.
     pub fn add_output(
         &mut self,
         ovk: Option<OutgoingViewingKey>,
@@ -672,9 +745,48 @@ impl Builder {
         if !flags.outputs_enabled() {
             return Err(OutputError::OutputsDisabled);
         }
+        if flags.cross_address_disabled() {
+            return Err(OutputError::CrossAddressDisabled);
+        }
 
         self.outputs
             .push(OutputInfo::new(ovk, recipient, value, memo));
+
+        Ok(())
+    }
+
+    /// Adds a wallet-controlled change output, to an address owned by `fvk`.
+    ///
+    /// This is the only way to retain shielded value in a bundle that disables
+    /// cross-address transfers: the builder pairs the change output with a fabricated
+    /// zero-value spend at `recipient`, controlled by `fvk`, in the same action.
+    /// (Withdrawals leave such a bundle through its positive value balance; its real
+    /// spends are each paired with a fabricated zero-value output to the spent note's
+    /// own address.) The fabricated spend's authorization is produced by the normal
+    /// signing flow — [`Bundle::apply_signatures`] with the [`SpendAuthorizingKey`]
+    /// matching `fvk` — exactly like the bundle's real spends.
+    ///
+    /// This may also be used in bundles that permit cross-address transfers, where it
+    /// behaves like [`Builder::add_output`] plus an ownership check, so wallet change
+    /// logic can be uniform across bundle kinds.
+    ///
+    /// Returns an error if `fvk` does not own `recipient`.
+    pub fn add_change_output(
+        &mut self,
+        fvk: FullViewingKey,
+        ovk: Option<OutgoingViewingKey>,
+        recipient: Address,
+        value: NoteValue,
+        memo: [u8; 512],
+    ) -> Result<(), OutputError> {
+        let flags = self.bundle_type.flags();
+        if !flags.outputs_enabled() {
+            return Err(OutputError::OutputsDisabled);
+        }
+
+        let output =
+            OutputInfo::change(fvk, ovk, recipient, value, memo).ok_or(OutputError::FvkMismatch)?;
+        self.outputs.push(output);
 
         Ok(())
     }
@@ -796,9 +908,11 @@ pub fn bundle<V: TryFrom<i64>>(
 /// Builds a bundle containing the given spent notes and outputs, with the Action circuits
 /// built for the given `circuit_version`.
 ///
-/// Only [`OrchardCircuitVersion::FixedPostNu6_2`] should be used to prove transactions for the
-/// network; [`OrchardCircuitVersion::InsecurePreNu6_2`] exists only to reproduce pre-NU6.2
-/// proofs in tests, and requires an insecure proving key (see
+/// [`OrchardCircuitVersion::FixedPostNu6_2`] and [`OrchardCircuitVersion::Ironwood`] are
+/// used to prove transactions for the network (selected by the bundle's transaction
+/// format); bundles that disable cross-address transfers require
+/// [`OrchardCircuitVersion::Ironwood`]. [`OrchardCircuitVersion::InsecurePreNu6_2`] exists
+/// only to reproduce pre-NU6.2 proofs in tests, and requires an insecure proving key (see
 /// [`ProvingKey::build_for_version`]) to create the proof.
 ///
 /// [`ProvingKey::build_for_version`]: crate::circuit::ProvingKey::build_for_version
@@ -818,6 +932,16 @@ pub fn bundle_for_version<V: TryFrom<i64>>(
         spends,
         outputs,
         |pre_actions, flags, value_balance, bundle_meta, mut rng| {
+            // A bundle that disables cross-address transfers can only be proven for a
+            // circuit version that constrains the disableCrossAddress flag. (An empty
+            // builder produces no bundle, so flag/version coherence is irrelevant then.)
+            if !pre_actions.is_empty()
+                && flags.cross_address_disabled()
+                && !circuit_version.supports_cross_address_restriction()
+            {
+                return Err(BuildError::CircuitVersionMismatch);
+            }
+
             let result_value_balance: V = i64::try_from(value_balance)
                 .map_err(BuildError::ValueSum)
                 .and_then(|i| {
@@ -895,8 +1019,87 @@ fn build_bundle<B, R: RngCore>(
         .num_actions(num_requested_spends, num_requested_outputs)
         .map_err(|_| BuildError::BundleTypeNotSatisfiable)?;
 
-    // Pair up the spends and outputs, extending with dummy values as necessary.
-    let (pre_actions, bundle_meta) = {
+    let (pre_actions, bundle_meta) = if flags.cross_address_disabled() {
+        // Every action's output must be addressed to the note it spends, so the
+        // spend/output pairing within each action is intentional:
+        //
+        // - each requested spend is paired with a fabricated zero-value output to the
+        //   spent note's own address;
+        // - each requested (wallet-controlled change) output is paired with a fabricated
+        //   zero-value spend controlled by the wallet at the change address — withdrawn
+        //   value leaves the bundle through its value balance, so retained value is
+        //   exactly the wallet's change;
+        // - padding actions pair a dummy spend with a zero-value output to the dummy's
+        //   own address, since the cross-address checks apply to dummy actions too.
+        //
+        // Only complete pairs are shuffled.
+        let mut pairs = Vec::with_capacity(num_actions);
+
+        for (spend_idx, spend) in spends.into_iter().enumerate() {
+            let output = OutputInfo::new(None, spend.note.recipient(), NoteValue::ZERO, [0u8; 512]);
+            pairs.push((Some(spend_idx), None, spend, output));
+        }
+
+        for (out_idx, output) in outputs.into_iter().enumerate() {
+            let (fvk, scope) = output
+                .change_fvk
+                .clone()
+                .ok_or(BuildError::CrossAddressDisabled)?;
+            let rho = Rho::from_nf_old(Nullifier::dummy(&mut rng));
+            let note = Note::new(output.recipient, NoteValue::ZERO, rho, &mut rng);
+            let spend = SpendInfo {
+                // The wallet controls this spend: it is signed through the normal
+                // signing flow, by the spend authorizing key matching `fvk`.
+                dummy_sk: None,
+                fvk,
+                scope,
+                note,
+                merkle_path: MerklePath::dummy(&mut rng),
+            };
+            pairs.push((None, Some(out_idx), spend, output));
+        }
+
+        while pairs.len() < num_actions {
+            let spend = SpendInfo::dummy(&mut rng);
+            let output = OutputInfo::new(None, spend.note.recipient(), NoteValue::ZERO, [0u8; 512]);
+            pairs.push((None, None, spend, output));
+        }
+
+        // Shuffle the action pairs, so that learning the position of a specific action
+        // doesn't reveal anything on its own about its meaning in the transaction
+        // context. (The spend/output pairing inside each action is intentional and is
+        // preserved.)
+        pairs.shuffle(&mut rng);
+
+        let mut bundle_meta = BundleMetadata::new(num_requested_spends, num_requested_outputs);
+        let pre_actions = pairs
+            .into_iter()
+            .enumerate()
+            .map(|(action_idx, (spend_idx, out_idx, spend, output))| {
+                // Record the post-randomization spend location
+                if let Some(spend_idx) = spend_idx {
+                    bundle_meta.spend_indices[spend_idx] = action_idx;
+                }
+
+                // Record the post-randomization output location
+                if let Some(out_idx) = out_idx {
+                    bundle_meta.output_indices[out_idx] = action_idx;
+                }
+
+                debug_assert_eq!(
+                    spend.note.recipient(),
+                    output.recipient,
+                    "cross-address-disabled actions pair a spend with an output to the \
+                     same address by construction",
+                );
+
+                ActionInfo::new(spend, output, &mut rng)
+            })
+            .collect::<Vec<_>>();
+
+        (pre_actions, bundle_meta)
+    } else {
+        // Pair up the spends and outputs, extending with dummy values as necessary.
         let mut indexed_spends = spends
             .into_iter()
             .chain(iter::repeat_with(|| SpendInfo::dummy(&mut rng)))
@@ -1393,16 +1596,249 @@ pub mod testing {
 mod tests {
     use rand::rngs::OsRng;
 
-    use super::Builder;
+    use super::{Builder, OutputError, OutputInfo};
     use crate::{
         builder::BundleType,
-        bundle::{Authorized, Bundle},
-        circuit::ProvingKey,
+        bundle::{Authorized, Bundle, Flags},
+        circuit::{OrchardCircuitVersion, ProvingKey},
         constants::MERKLE_DEPTH_ORCHARD,
         keys::{FullViewingKey, Scope, SpendingKey},
-        tree::EMPTY_ROOTS,
+        note::{Note, Nullifier, Rho},
+        tree::{MerklePath, EMPTY_ROOTS},
         value::NoteValue,
     };
+
+    /// Fabricates a note owned by `fvk`, and a Merkle path whose root serves as the
+    /// anchor for spending it.
+    fn wallet_note(
+        rng: &mut rand::rngs::OsRng,
+        fvk: &FullViewingKey,
+        value: u64,
+    ) -> (Note, MerklePath) {
+        let note = Note::new(
+            fvk.address_at(0u32, Scope::External),
+            NoteValue::from_raw(value),
+            Rho::from_nf_old(Nullifier::dummy(rng)),
+            &mut *rng,
+        );
+        let merkle_path = MerklePath::dummy(rng);
+        (note, merkle_path)
+    }
+
+    fn restricted_bundle_type() -> BundleType {
+        BundleType::Transactional {
+            flags: Flags::CROSS_ADDRESS_DISABLED,
+            bundle_required: false,
+        }
+    }
+
+    #[test]
+    fn cross_address_disabled_builder_pairs_actions() {
+        let mut rng = OsRng;
+
+        let sk = SpendingKey::random(&mut rng);
+        let fvk = FullViewingKey::from(&sk);
+        let (note, merkle_path) = wallet_note(&mut rng, &fvk, 15_000);
+        let anchor = merkle_path.root(note.commitment().into());
+
+        let mut builder = Builder::new_for_version(
+            restricted_bundle_type(),
+            anchor,
+            OrchardCircuitVersion::Ironwood,
+        );
+
+        builder.add_spend(fvk.clone(), note, merkle_path).unwrap();
+
+        // Ordinary outputs cannot be constructed in a restricted bundle.
+        assert_eq!(
+            builder.add_output(
+                None,
+                fvk.address_at(1u32, Scope::External),
+                NoteValue::from_raw(1),
+                [0u8; 512],
+            ),
+            Err(OutputError::CrossAddressDisabled),
+        );
+
+        // Change outputs must be owned by the provided full viewing key.
+        let other_fvk = FullViewingKey::from(&SpendingKey::random(&mut rng));
+        assert_eq!(
+            builder.add_change_output(
+                fvk.clone(),
+                None,
+                other_fvk.address_at(0u32, Scope::External),
+                NoteValue::from_raw(5_000),
+                [0u8; 512],
+            ),
+            Err(OutputError::FvkMismatch),
+        );
+
+        let change_addr = fvk.address_at(0u32, Scope::Internal);
+        builder
+            .add_change_output(
+                fvk.clone(),
+                Some(fvk.to_ovk(Scope::Internal)),
+                change_addr,
+                NoteValue::from_raw(5_000),
+                [0u8; 512],
+            )
+            .unwrap();
+
+        let (bundle, meta) = builder.build_for_pczt(&mut rng).unwrap();
+
+        // One real spend and one change output occupy one action each.
+        assert_eq!(bundle.actions.len(), 2);
+
+        // The withdrawn value leaves through the value balance.
+        assert_eq!(i64::try_from(bundle.value_sum).unwrap(), 10_000);
+
+        // Every action's output is addressed to the note it spends.
+        for action in &bundle.actions {
+            assert_eq!(action.spend.recipient, action.output.recipient);
+        }
+
+        let spend_action = meta.spend_action_index(0).unwrap();
+        let change_action = meta.output_action_index(0).unwrap();
+        assert_ne!(spend_action, change_action);
+
+        // The real spend is paired with a fabricated zero-value output.
+        let sa = &bundle.actions[spend_action];
+        assert_eq!(sa.spend.value, Some(NoteValue::from_raw(15_000)));
+        assert!(sa.spend.dummy_sk.is_none());
+        assert_eq!(sa.output.value, Some(NoteValue::ZERO));
+
+        // The change output is paired with a fabricated wallet-controlled zero-value
+        // spend at the change address.
+        let ca = &bundle.actions[change_action];
+        assert_eq!(ca.spend.value, Some(NoteValue::ZERO));
+        assert!(ca.spend.dummy_sk.is_none());
+        assert_eq!(ca.spend.fvk.as_ref(), Some(&fvk));
+        assert_eq!(ca.spend.recipient, Some(change_addr));
+        assert_eq!(ca.output.value, Some(NoteValue::from_raw(5_000)));
+        assert_eq!(ca.output.recipient, Some(change_addr));
+    }
+
+    #[test]
+    fn cross_address_disabled_padding_pairs_dummy_addresses() {
+        let mut rng = OsRng;
+
+        let sk = SpendingKey::random(&mut rng);
+        let fvk = FullViewingKey::from(&sk);
+
+        let mut builder = Builder::new_for_version(
+            restricted_bundle_type(),
+            EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
+            OrchardCircuitVersion::Ironwood,
+        );
+
+        builder
+            .add_change_output(
+                fvk.clone(),
+                None,
+                fvk.address_at(0u32, Scope::Internal),
+                NoteValue::ZERO,
+                [0u8; 512],
+            )
+            .unwrap();
+
+        let (bundle, meta) = builder.build_for_pczt(&mut rng).unwrap();
+
+        // The single change output is padded to MIN_ACTIONS with a matched dummy pair:
+        // the cross-address checks apply to dummy actions too.
+        assert_eq!(bundle.actions.len(), 2);
+        for action in &bundle.actions {
+            assert_eq!(action.spend.recipient, action.output.recipient);
+        }
+
+        let change_action = meta.output_action_index(0).unwrap();
+        let padding_action = 1 - change_action;
+        assert!(bundle.actions[padding_action].spend.dummy_sk.is_some());
+        assert_eq!(
+            bundle.actions[padding_action].output.value,
+            Some(NoteValue::ZERO)
+        );
+    }
+
+    #[test]
+    fn cross_address_disabled_requires_matching_circuit_version() {
+        let mut rng = OsRng;
+
+        let sk = SpendingKey::random(&mut rng);
+        let fvk = FullViewingKey::from(&sk);
+
+        // The legacy circuit versions leave the disableCrossAddress flag unconstrained,
+        // so a restricted bundle cannot be built for them.
+        let mut builder = Builder::new(
+            restricted_bundle_type(),
+            EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
+        );
+        builder
+            .add_change_output(
+                fvk.clone(),
+                None,
+                fvk.address_at(0u32, Scope::Internal),
+                NoteValue::ZERO,
+                [0u8; 512],
+            )
+            .unwrap();
+        assert!(matches!(
+            builder.build::<i64>(&mut rng),
+            Err(super::BuildError::CircuitVersionMismatch),
+        ));
+
+        // An empty builder produces no bundle, so flag/version coherence is irrelevant.
+        let builder = Builder::new(
+            restricted_bundle_type(),
+            EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
+        );
+        assert!(builder.build::<i64>(&mut rng).unwrap().is_none());
+    }
+
+    #[test]
+    fn cross_address_disabled_rejects_non_change_outputs() {
+        let mut rng = OsRng;
+
+        let sk = SpendingKey::random(&mut rng);
+        let fvk = FullViewingKey::from(&sk);
+
+        // The free `bundle_for_version` function accepts caller-constructed outputs;
+        // ordinary outputs are rejected at build time in a restricted bundle.
+        let result = super::bundle_for_version::<i64>(
+            &mut rng,
+            EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
+            restricted_bundle_type(),
+            vec![],
+            vec![OutputInfo::new(
+                None,
+                fvk.address_at(0u32, Scope::External),
+                NoteValue::ZERO,
+                [0u8; 512],
+            )],
+            OrchardCircuitVersion::Ironwood,
+        );
+        assert!(matches!(
+            result,
+            Err(super::BuildError::CrossAddressDisabled)
+        ));
+
+        // A wallet-controlled change output is accepted.
+        let result = super::bundle_for_version::<i64>(
+            &mut rng,
+            EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
+            restricted_bundle_type(),
+            vec![],
+            vec![OutputInfo::change(
+                fvk.clone(),
+                None,
+                fvk.address_at(0u32, Scope::Internal),
+                NoteValue::ZERO,
+                [0u8; 512],
+            )
+            .unwrap()],
+            OrchardCircuitVersion::Ironwood,
+        );
+        assert!(result.unwrap().is_some());
+    }
 
     #[test]
     fn shielding_bundle() {

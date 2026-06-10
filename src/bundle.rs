@@ -52,6 +52,22 @@ impl<T> Action<T> {
     }
 }
 
+/// The transaction-format generation an Orchard bundle is encoded in.
+///
+/// This determines how the bundle's flag byte is interpreted: NU6.3 (Ironwood)
+/// transaction formats carry the `disableCrossAddress` flag in bit 2, which is a
+/// reserved zero bit in earlier formats. Bit 2 has the same meaning in every format
+/// in which it is clear — cross-address transfers are permitted — so flag values
+/// never need to be reinterpreted across formats.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BundleFormat {
+    /// Transaction formats before NU6.3: bit 2 of the flag byte is a reserved zero bit.
+    PreIronwood,
+    /// NU6.3 (Ironwood) transaction formats: bit 2 of the flag byte is the
+    /// `disableCrossAddress` flag.
+    Ironwood,
+}
+
 /// Orchard-specific flags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Flags {
@@ -67,18 +83,35 @@ pub struct Flags {
     /// guaranteed to be dummy notes. If `true`, the created notes may be either real or
     /// dummy notes.
     outputs_enabled: bool,
+    /// Flag denoting whether cross-address transfers are disabled in the transaction.
+    ///
+    /// If `true`, the created note within each [`Action`] in the transaction's [`Bundle`]
+    /// is guaranteed to be addressed to the same `(g_d, pk_d)` as the note it spends. If
+    /// `false`, created notes may be addressed arbitrarily.
+    ///
+    /// The flag is encoded in NU6.3 (Ironwood) transaction formats; in earlier formats
+    /// its bit is a reserved zero bit, matching the `false` value here.
+    cross_address_disabled: bool,
 }
 
 const FLAG_SPENDS_ENABLED: u8 = 0b0000_0001;
 const FLAG_OUTPUTS_ENABLED: u8 = 0b0000_0010;
+const FLAG_CROSS_ADDRESS_DISABLED: u8 = 0b0000_0100;
 const FLAGS_EXPECTED_UNSET: u8 = !(FLAG_SPENDS_ENABLED | FLAG_OUTPUTS_ENABLED);
+const IRONWOOD_FLAGS_EXPECTED_UNSET: u8 =
+    !(FLAG_SPENDS_ENABLED | FLAG_OUTPUTS_ENABLED | FLAG_CROSS_ADDRESS_DISABLED);
 
 impl Flags {
     /// Construct a set of flags from its constituent parts
-    pub(crate) const fn from_parts(spends_enabled: bool, outputs_enabled: bool) -> Self {
+    pub(crate) const fn from_parts(
+        spends_enabled: bool,
+        outputs_enabled: bool,
+        cross_address_disabled: bool,
+    ) -> Self {
         Flags {
             spends_enabled,
             outputs_enabled,
+            cross_address_disabled,
         }
     }
 
@@ -86,18 +119,29 @@ impl Flags {
     pub const ENABLED: Flags = Flags {
         spends_enabled: true,
         outputs_enabled: true,
+        cross_address_disabled: false,
     };
 
     /// The flag set with spends disabled.
     pub const SPENDS_DISABLED: Flags = Flags {
         spends_enabled: false,
         outputs_enabled: true,
+        cross_address_disabled: false,
     };
 
     /// The flag set with outputs disabled.
     pub const OUTPUTS_DISABLED: Flags = Flags {
         spends_enabled: true,
         outputs_enabled: false,
+        cross_address_disabled: false,
+    };
+
+    /// The flag set with spends and outputs enabled and cross-address transfers
+    /// disabled: every action creates its note at the address it spends from.
+    pub const CROSS_ADDRESS_DISABLED: Flags = Flags {
+        spends_enabled: true,
+        outputs_enabled: true,
+        cross_address_disabled: true,
     };
 
     /// Flag denoting whether Orchard spends are enabled in the transaction.
@@ -118,8 +162,21 @@ impl Flags {
         self.outputs_enabled
     }
 
+    /// Flag denoting whether cross-address transfers are disabled in the transaction.
+    ///
+    /// If `true`, the created note within each [`Action`] in the transaction's [`Bundle`]
+    /// is guaranteed to be addressed to the same `(g_d, pk_d)` as the note it spends. If
+    /// `false`, created notes may be addressed arbitrarily.
+    pub fn cross_address_disabled(&self) -> bool {
+        self.cross_address_disabled
+    }
+
     /// Serialize flags to a byte as defined in [Zcash Protocol Spec § 7.1: Transaction
     /// Encoding And Consensus][txencoding].
+    ///
+    /// The encoding is identical in every transaction format: bit 2, which carries
+    /// `disableCrossAddress`, is clear in every flag set that a pre-NU6.3 format can
+    /// contain.
     ///
     /// [txencoding]: https://zips.z.cash/protocol/protocol.pdf#txnencoding
     pub fn to_byte(&self) -> u8 {
@@ -130,13 +187,18 @@ impl Flags {
         if self.outputs_enabled {
             value |= FLAG_OUTPUTS_ENABLED;
         }
+        if self.cross_address_disabled {
+            value |= FLAG_CROSS_ADDRESS_DISABLED;
+        }
         value
     }
 
     /// Parses flags from a single byte as defined in [Zcash Protocol Spec § 7.1:
-    /// Transaction Encoding And Consensus][txencoding].
+    /// Transaction Encoding And Consensus][txencoding], for transaction formats
+    /// preceding NU6.3 ([`BundleFormat::PreIronwood`]).
     ///
-    /// Returns `None` if unexpected bits are set in the flag byte.
+    /// Returns `None` if unexpected bits are set in the flag byte. Bit 2 is a reserved
+    /// zero bit in these formats; the parsed flags permit cross-address transfers.
     ///
     /// [txencoding]: https://zips.z.cash/protocol/protocol.pdf#txnencoding
     pub fn from_byte(value: u8) -> Option<Self> {
@@ -145,6 +207,27 @@ impl Flags {
             Some(Self {
                 spends_enabled: value & FLAG_SPENDS_ENABLED != 0,
                 outputs_enabled: value & FLAG_OUTPUTS_ENABLED != 0,
+                cross_address_disabled: false,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Parses flags from a single byte as defined in [Zcash Protocol Spec § 7.1:
+    /// Transaction Encoding And Consensus][txencoding], for NU6.3 (Ironwood)
+    /// transaction formats ([`BundleFormat::Ironwood`]), in which bit 2 of the flag
+    /// byte is the `disableCrossAddress` flag.
+    ///
+    /// Returns `None` if unexpected bits are set in the flag byte.
+    ///
+    /// [txencoding]: https://zips.z.cash/protocol/protocol.pdf#txnencoding
+    pub fn from_byte_ironwood(value: u8) -> Option<Self> {
+        if value & IRONWOOD_FLAGS_EXPECTED_UNSET == 0 {
+            Some(Self {
+                spends_enabled: value & FLAG_SPENDS_ENABLED != 0,
+                outputs_enabled: value & FLAG_OUTPUTS_ENABLED != 0,
+                cross_address_disabled: value & FLAG_CROSS_ADDRESS_DISABLED != 0,
             })
         } else {
             None
@@ -705,9 +788,9 @@ pub mod testing {
     }
 
     prop_compose! {
-        /// Create an arbitrary set of flags.
+        /// Create an arbitrary set of flags for a pre-NU6.3 bundle.
         pub fn arb_flags()(spends_enabled in prop::bool::ANY, outputs_enabled in prop::bool::ANY) -> Flags {
-            Flags::from_parts(spends_enabled, outputs_enabled)
+            Flags::from_parts(spends_enabled, outputs_enabled, false)
         }
     }
 
@@ -789,8 +872,56 @@ mod tests {
     use proptest::prelude::*;
 
     use super::testing::arb_bundle;
-    use super::{Authorized, Bundle, BundleError};
+    use super::{Authorized, Bundle, BundleError, Flags};
     use crate::Proof;
+
+    #[test]
+    fn flags_byte_encoding() {
+        // The flag bits, fixed by the transaction encoding.
+        assert_eq!(Flags::ENABLED.to_byte(), 0b011);
+        assert_eq!(Flags::SPENDS_DISABLED.to_byte(), 0b010);
+        assert_eq!(Flags::OUTPUTS_DISABLED.to_byte(), 0b001);
+        assert_eq!(Flags::CROSS_ADDRESS_DISABLED.to_byte(), 0b111);
+    }
+
+    #[test]
+    fn flags_parsing_is_era_uniform() {
+        // Every byte a pre-NU6.3 format can contain parses identically in both formats:
+        // a clear bit 2 means cross-address transfers are permitted in every era.
+        for value in 0b000..=0b011 {
+            let flags = Flags::from_byte(value).unwrap();
+            assert_eq!(Flags::from_byte_ironwood(value), Some(flags));
+            assert!(!flags.cross_address_disabled());
+            assert_eq!(flags.to_byte(), value);
+        }
+    }
+
+    #[test]
+    fn legacy_flags_parsing_rejects_reserved_bits() {
+        // https://p.z.cash/TCR:bad-txns-v5-reserved-bits-nonzero
+        for value in 0b100..=u8::MAX {
+            assert_eq!(Flags::from_byte(value), None);
+        }
+    }
+
+    #[test]
+    fn ironwood_flags_parsing() {
+        // Bit 2 is `disableCrossAddress`.
+        for value in 0b100..=0b111 {
+            let flags = Flags::from_byte_ironwood(value).unwrap();
+            assert!(flags.cross_address_disabled());
+            assert_eq!(flags.to_byte(), value);
+        }
+        assert_eq!(
+            Flags::from_byte_ironwood(0b111),
+            Some(Flags::CROSS_ADDRESS_DISABLED)
+        );
+
+        // Bits 3 and above are reserved zero bits.
+        for value in 0b1000..=u8::MAX {
+            assert_eq!(Flags::from_byte_ironwood(value), None);
+        }
+    }
 
     #[test]
     fn expected_proof_size_matches_known_values() {

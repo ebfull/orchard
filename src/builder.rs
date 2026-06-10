@@ -63,7 +63,7 @@ impl BundleType {
     /// The DISABLED bundle type does not permit any bundle to be produced, and when used in the
     /// builder will prevent any spends or outputs from being added.
     pub const DISABLED: BundleType = BundleType::Transactional {
-        flags: Flags::from_parts(false, false),
+        flags: Flags::from_parts(false, false, false),
         bundle_required: false,
     };
 

@@ -52,6 +52,10 @@ pub(crate) fn hash_bundle_txid_data<A: Authorization, V: Copy + Into<i64>>(
     h.update(ch.finalize().as_bytes());
     h.update(mh.finalize().as_bytes());
     h.update(nh.finalize().as_bytes());
+    // The flag byte is the bundle's transaction-encoding byte, which is era-uniform:
+    // bit 2 (`disableCrossAddress`) is set only in flag sets that NU6.3 transaction
+    // formats can contain. Cross-format domain separation comes from the transaction
+    // version in the ZIP 244 header digest, not from this hash.
     h.update(&[bundle.flags().to_byte()]);
     h.update(&(*bundle.value_balance()).into().to_le_bytes());
     h.update(&bundle.anchor().to_bytes());

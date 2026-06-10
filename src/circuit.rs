@@ -107,11 +107,15 @@ pub struct Config {
 
 /// Selects which version of the Orchard Action circuit to build.
 ///
-/// The two versions produce different verifying keys: the fixed circuit anchors the
+/// Each version produces a different verifying key. The two legacy versions share one
+/// constraint system and differ only in fixed content: the fixed circuit anchors the
 /// variable-base scalar-multiplication base (see `halo2_gadgets`), the pre-NU6.2 one does
-/// not. [`FixedPostNu6_2`] is used for all proving and current verification;
-/// [`InsecurePreNu6_2`] reconstructs the historical (NU5..NU6.2) verifying key solely to
-/// verify proofs produced before NU6.2.
+/// not. [`Ironwood`] additionally constrains each action against the `disableCrossAddress`
+/// public input, and therefore has its own constraint system.
+///
+/// [`FixedPostNu6_2`] and [`Ironwood`] are used for proving and current verification
+/// (selected by the bundle's transaction format); [`InsecurePreNu6_2`] reconstructs the
+/// historical (NU5..NU6.2) verifying key solely to verify proofs produced before NU6.2.
 ///
 /// This is a runtime value rather than a type parameter: it is carried in [`Circuit`] and
 /// chosen when building a [`ProvingKey`] or [`VerifyingKey`], so the circuit version can be
@@ -119,16 +123,21 @@ pub struct Config {
 ///
 /// [`FixedPostNu6_2`]: OrchardCircuitVersion::FixedPostNu6_2
 /// [`InsecurePreNu6_2`]: OrchardCircuitVersion::InsecurePreNu6_2
+/// [`Ironwood`]: OrchardCircuitVersion::Ironwood
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum OrchardCircuitVersion {
     /// The insecure pre-NU6.2 circuit, in which the variable-base scalar-multiplication base
     /// is not anchored to the real base. For reconstructing the historical (NU5..NU6.2)
     /// verifying key only — never for proving or current verification.
     InsecurePreNu6_2,
-    /// The fixed circuit, active from NU6.2 onward. Used for all proving and current
-    /// verification.
+    /// The fixed circuit, active from NU6.2 onward.
     #[default]
     FixedPostNu6_2,
+    /// The Ironwood circuit, active from NU6.3 onward. In addition to the fixed circuit's
+    /// behavior, it constrains each action against the `disableCrossAddress` public input:
+    /// when that flag is 1, the action's new note must be addressed to the same
+    /// `(g_d, pk_d)` as its spent note.
+    Ironwood,
 }
 
 impl OrchardCircuitVersion {
@@ -136,7 +145,24 @@ impl OrchardCircuitVersion {
     fn halo2_version(self) -> CircuitVersion {
         match self {
             OrchardCircuitVersion::InsecurePreNu6_2 => CircuitVersion::InsecureUnanchoredBase,
-            OrchardCircuitVersion::FixedPostNu6_2 => CircuitVersion::AnchoredBase,
+            OrchardCircuitVersion::FixedPostNu6_2 | OrchardCircuitVersion::Ironwood => {
+                CircuitVersion::AnchoredBase
+            }
+        }
+    }
+
+    /// Whether this circuit version enforces the `disableCrossAddress` public input.
+    ///
+    /// Statements with `disableCrossAddress = 1` can be proven and verified only with
+    /// keys for a circuit version that constrains the flag; the legacy circuits leave
+    /// it unconstrained, so they cannot enforce — and must not be asked to attest to —
+    /// the restriction.
+    pub fn supports_cross_address_restriction(self) -> bool {
+        match self {
+            OrchardCircuitVersion::InsecurePreNu6_2 | OrchardCircuitVersion::FixedPostNu6_2 => {
+                false
+            }
+            OrchardCircuitVersion::Ironwood => true,
         }
     }
 }
@@ -144,8 +170,9 @@ impl OrchardCircuitVersion {
 /// The Orchard Action circuit.
 ///
 /// The `circuit_version` field selects which circuit to build; it defaults to
-/// [`OrchardCircuitVersion::FixedPostNu6_2`], so a default `Circuit` is the current (fixed)
-/// circuit. [`OrchardCircuitVersion::InsecurePreNu6_2`] exists only to rebuild the historical
+/// [`OrchardCircuitVersion::FixedPostNu6_2`], so a default `Circuit` is the fixed
+/// circuit. [`OrchardCircuitVersion::Ironwood`] selects the NU6.3 circuit, and
+/// [`OrchardCircuitVersion::InsecurePreNu6_2`] exists only to rebuild the historical
 /// verifying key.
 #[derive(Clone, Debug, Default)]
 pub struct Circuit {
@@ -204,9 +231,11 @@ impl Circuit {
     }
 
     /// Like [`Circuit::from_action_context`], but builds the circuit for the given
-    /// `circuit_version`. Only [`OrchardCircuitVersion::FixedPostNu6_2`] should be used for
-    /// proving; [`OrchardCircuitVersion::InsecurePreNu6_2`] exists to reconstruct historical
-    /// proofs (e.g. for testing that pre-NU6.2 proofs still verify).
+    /// `circuit_version`. [`OrchardCircuitVersion::FixedPostNu6_2`] and
+    /// [`OrchardCircuitVersion::Ironwood`] are used for proving (selected by the bundle's
+    /// transaction format); [`OrchardCircuitVersion::InsecurePreNu6_2`] exists to
+    /// reconstruct historical proofs (e.g. for testing that pre-NU6.2 proofs still
+    /// verify).
     pub fn from_action_context_for_version(
         spend: SpendInfo,
         output_note: Note,
@@ -260,15 +289,14 @@ impl Circuit {
     }
 }
 
-impl plonk::Circuit<pallas::Base> for Circuit {
-    type Config = Config;
-    type FloorPlanner = floor_planner::V1;
-
-    fn without_witnesses(&self) -> Self {
-        Self::default()
-    }
-
-    fn configure(meta: &mut plonk::ConstraintSystem<pallas::Base>) -> Self::Config {
+impl Config {
+    /// Configures the Orchard Action constraint system shared by every circuit version.
+    ///
+    /// Columns, selectors, gates, and lookups must be allocated in exactly this order:
+    /// the pinned verifying keys of the deployed circuit versions depend on it.
+    /// Version-specific additions (such as the Ironwood cross-address gate) are appended
+    /// by the corresponding `plonk::Circuit::configure` entry point after this returns.
+    fn configure(meta: &mut plonk::ConstraintSystem<pallas::Base>) -> Self {
         // Advice columns used in the Orchard circuit.
         let advices = [
             meta.advice_column(),
@@ -456,15 +484,33 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             new_note_commit_config,
         }
     }
+}
 
+/// Cells carrying the addresses of an action's spent and newly created notes, returned
+/// from the shared synthesis logic so that circuit versions can impose additional
+/// constraints on them.
+struct AddressPoints {
+    g_d_old: NonIdentityPoint<pallas::Affine, EccChip<OrchardFixedBases>>,
+    pk_d_old: NonIdentityPoint<pallas::Affine, EccChip<OrchardFixedBases>>,
+    g_d_new: NonIdentityPoint<pallas::Affine, EccChip<OrchardFixedBases>>,
+    pk_d_new: NonIdentityPoint<pallas::Affine, EccChip<OrchardFixedBases>>,
+}
+
+impl Circuit {
+    /// Synthesizes the Orchard Action logic shared by every circuit version, returning
+    /// the cells carrying the old and new note addresses so that circuit versions can
+    /// impose additional constraints on them.
+    ///
+    /// Layouter operations must not be added, removed, or reordered: the pinned
+    /// verifying keys of the deployed circuit versions depend on this synthesis.
     #[allow(non_snake_case)]
-    fn synthesize(
+    fn synthesize_base(
         &self,
-        config: Self::Config,
-        mut layouter: impl Layouter<pallas::Base>,
-    ) -> Result<(), plonk::Error> {
+        config: &Config,
+        layouter: &mut impl Layouter<pallas::Base>,
+    ) -> Result<AddressPoints, plonk::Error> {
         // Load the Sinsemilla generator lookup table used by the whole circuit.
-        SinsemillaChip::load(config.sinsemilla_config_1.clone(), &mut layouter)?;
+        SinsemillaChip::load(config.sinsemilla_config_1.clone(), layouter)?;
 
         // Construct the ECC chip.
         let ecc_chip = config.ecc_chip(self.circuit_version.halo2_version());
@@ -718,7 +764,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         }
 
         // New note commitment integrity (https://p.z.cash/ZKS:action-cmx-new-integrity?partial).
-        {
+        let (g_d_new, pk_d_new) = {
             // Witness g_d_new
             let g_d_new = {
                 let g_d_new = self.g_d_new.map(|g_d_new| g_d_new.to_affine());
@@ -775,7 +821,9 @@ impl plonk::Circuit<pallas::Base> for Circuit {
 
             // Constrain cmx to equal public input
             layouter.constrain_instance(cmx.inner().cell(), config.primary, CMX)?;
-        }
+
+            (g_d_new, pk_d_new)
+        };
 
         // Constrain the remaining Orchard circuit checks.
         layouter.assign_region(
@@ -825,7 +873,45 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             },
         )?;
 
-        Ok(())
+        Ok(AddressPoints {
+            g_d_old,
+            pk_d_old,
+            g_d_new,
+            pk_d_new,
+        })
+    }
+}
+
+impl plonk::Circuit<pallas::Base> for Circuit {
+    type Config = Config;
+    type FloorPlanner = floor_planner::V1;
+
+    fn without_witnesses(&self) -> Self {
+        // Preserve the circuit version: the V1 floor planner synthesizes
+        // `without_witnesses()` in its measurement pass, and region shapes depend on
+        // the version.
+        Circuit {
+            circuit_version: self.circuit_version,
+            ..Self::default()
+        }
+    }
+
+    fn configure(meta: &mut plonk::ConstraintSystem<pallas::Base>) -> Self::Config {
+        Config::configure(meta)
+    }
+
+    fn synthesize(
+        &self,
+        config: Self::Config,
+        mut layouter: impl Layouter<pallas::Base>,
+    ) -> Result<(), plonk::Error> {
+        // This entry point builds the constraint system shared by the legacy circuit
+        // versions. The Ironwood version's cross-address gate is not part of it, so fail
+        // closed rather than synthesize an Ironwood circuit without its gate.
+        if self.circuit_version == OrchardCircuitVersion::Ironwood {
+            return Err(plonk::Error::Synthesis);
+        }
+        self.synthesize_base(&config, &mut layouter).map(|_| ())
     }
 }
 

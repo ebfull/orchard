@@ -340,11 +340,12 @@ mod tests {
 
     use crate::{
         builder::{Builder, BundleType},
-        circuit::ProvingKey,
+        bundle::Flags,
+        circuit::{OrchardCircuitVersion, ProvingKey, VerifyingKey},
         constants::MERKLE_DEPTH_ORCHARD,
         keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendingKey},
         note::{ExtractedNoteCommitment, RandomSeed, Rho},
-        pczt::{ProverError, TxExtractorError, Zip32Derivation},
+        pczt::{ProverError, TxExtractorError, VerifyError, Zip32Derivation},
         primitives::redpallas::{self, SpendAuth},
         tree::{MerkleHashOrchard, EMPTY_ROOTS},
         value::NoteValue,
@@ -520,6 +521,136 @@ mod tests {
         assert_eq!(bundle.value_balance(), &0);
         // We can successfully bind the bundle.
         bundle.apply_binding_signature(sighash, rng).unwrap();
+    }
+
+    // The PCZT flow for a bundle that disables cross-address transfers: 10_000 zatoshis
+    // are withdrawn through the value balance, and 5_000 are retained as
+    // wallet-controlled change.
+    #[test]
+    fn restricted_pczt_bundle() {
+        let ironwood_pk = ProvingKey::build_for_version(OrchardCircuitVersion::Ironwood);
+        let fixed_pk = ProvingKey::build();
+        let ironwood_vk = VerifyingKey::build_for_version(OrchardCircuitVersion::Ironwood);
+        let mut rng = OsRng;
+
+        let sk = SpendingKey::random(&mut rng);
+        let ask = SpendAuthorizingKey::from(&sk);
+        let fvk = FullViewingKey::from(&sk);
+        let recipient = fvk.address_at(0u32, Scope::External);
+
+        // Pretend we already received a note.
+        let value = NoteValue::from_raw(15_000);
+        let note = {
+            let rho = Rho::from_bytes(&pallas::Base::random(&mut rng).to_repr()).unwrap();
+            loop {
+                if let Some(note) =
+                    Note::from_parts(recipient, value, rho, RandomSeed::random(&mut rng, &rho))
+                        .into_option()
+                {
+                    break note;
+                }
+            }
+        };
+
+        // Use the tree with a single leaf.
+        let (anchor, merkle_path) = {
+            let cmx: ExtractedNoteCommitment = note.commitment().into();
+            let leaf = MerkleHashOrchard::from_cmx(&cmx);
+            let mut tree: ShardTree<MemoryShardStore<MerkleHashOrchard, u32>, 32, 16> =
+                ShardTree::new(MemoryShardStore::empty(), 100);
+            tree.append(
+                leaf,
+                Retention::Checkpoint {
+                    id: 0,
+                    marking: Marking::Marked,
+                },
+            )
+            .unwrap();
+            let root = tree.root_at_checkpoint_id(&0).unwrap().unwrap();
+            let position = tree.max_leaf_position(None).unwrap().unwrap();
+            let merkle_path = tree
+                .witness_at_checkpoint_id(position, &0)
+                .unwrap()
+                .unwrap();
+            (root.into(), merkle_path)
+        };
+
+        // Run the Creator and Constructor roles.
+        let build_restricted_pczt = |mut rng: OsRng| {
+            let mut builder = Builder::new_for_version(
+                BundleType::Transactional {
+                    flags: Flags::CROSS_ADDRESS_DISABLED,
+                    bundle_required: false,
+                },
+                anchor,
+                OrchardCircuitVersion::Ironwood,
+            );
+            builder
+                .add_spend(fvk.clone(), note, merkle_path.clone().into())
+                .unwrap();
+            builder
+                .add_change_output(
+                    fvk.clone(),
+                    Some(fvk.to_ovk(Scope::Internal)),
+                    fvk.address_at(0u32, Scope::Internal),
+                    NoteValue::from_raw(5_000),
+                    [0u8; 512],
+                )
+                .unwrap();
+            let balance: i64 = builder.value_balance().unwrap();
+            assert_eq!(balance, 10_000);
+            builder.build_for_pczt(&mut rng).unwrap().0
+        };
+        let mut pczt_bundle = build_restricted_pczt(rng);
+
+        // Run the IO Finalizer role.
+        let sighash = [0; 32];
+        pczt_bundle.finalize_io(sighash, rng).unwrap();
+
+        // Signers presented with a restricted bundle check the restriction before
+        // signing.
+        pczt_bundle.verify_cross_address_restriction().unwrap();
+
+        // A proving key whose circuit version does not constrain the
+        // disableCrossAddress flag cannot prove the bundle.
+        assert!(matches!(
+            pczt_bundle.create_proof(&fixed_pk, rng),
+            Err(ProverError::CircuitVersionMismatch)
+        ));
+
+        // An action that outputs to a different address than it spends is caught
+        // structurally, both by the Signer-facing check and by the Prover.
+        {
+            let mut tampered = build_restricted_pczt(rng);
+            tampered.finalize_io(sighash, rng).unwrap();
+            let other_fvk = FullViewingKey::from(&SpendingKey::random(&mut rng));
+            tampered.actions[0].output.recipient =
+                Some(other_fvk.address_at(0u32, Scope::External));
+            assert!(matches!(
+                tampered.verify_cross_address_restriction(),
+                Err(VerifyError::DisallowedCrossAddressTransfer)
+            ));
+            assert!(matches!(
+                tampered.create_proof(&ironwood_pk, rng),
+                Err(ProverError::DisallowedCrossAddressTransfer)
+            ));
+        }
+
+        // Run the Prover role.
+        pczt_bundle.create_proof(&ironwood_pk, rng).unwrap();
+
+        // Run the Signer role. Both actions — the real spend and the fabricated
+        // wallet-controlled change spend — are signed by the same spend authorizing key.
+        for action in pczt_bundle.actions_mut() {
+            action.sign(sighash, &ask, rng).unwrap();
+        }
+
+        // Run the Transaction Extractor role.
+        let bundle = pczt_bundle.extract::<i64>().unwrap().unwrap();
+
+        assert_eq!(bundle.value_balance(), &10_000);
+        let bundle = bundle.apply_binding_signature(sighash, rng).unwrap();
+        assert!(bundle.verify_proof(&ironwood_vk).is_ok());
     }
 
     #[test]

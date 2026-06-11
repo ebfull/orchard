@@ -1613,6 +1613,133 @@ mod tests {
         Ok((instance, proof))
     }
 
+    // Like `write_test_case`, with a trailing `disableCrossAddress` byte before the
+    // proof. Used for the Ironwood fixtures, whose statements carry the flag.
+    fn write_ironwood_test_case<W: std::io::Write>(
+        mut w: W,
+        instance: &Instance,
+        proof: &Proof,
+    ) -> std::io::Result<()> {
+        w.write_all(&instance.anchor().to_bytes())?;
+        w.write_all(&instance.cv_net().to_bytes())?;
+        w.write_all(&instance.nf_old().to_bytes())?;
+        w.write_all(&<[u8; 32]>::from(instance.rk()))?;
+        w.write_all(&instance.cmx().to_bytes())?;
+        w.write_all(&[
+            u8::from(instance.enable_spend()),
+            u8::from(instance.enable_output()),
+            u8::from(instance.disable_cross_address()),
+        ])?;
+        w.write_all(proof.as_ref())?;
+        Ok(())
+    }
+
+    fn read_ironwood_test_case<R: std::io::Read>(mut r: R) -> std::io::Result<(Instance, Proof)> {
+        let read_32_bytes = |r: &mut R| {
+            let mut ret = [0u8; 32];
+            r.read_exact(&mut ret).unwrap();
+            ret
+        };
+        let read_bool = |r: &mut R| {
+            let mut byte = [0u8; 1];
+            r.read_exact(&mut byte).unwrap();
+            match byte {
+                [0] => false,
+                [1] => true,
+                _ => panic!("Unexpected non-boolean byte"),
+            }
+        };
+
+        let anchor = crate::Anchor::from_bytes(read_32_bytes(&mut r)).unwrap();
+        let cv_net = ValueCommitment::from_bytes(&read_32_bytes(&mut r)).unwrap();
+        let nf_old = crate::note::Nullifier::from_bytes(&read_32_bytes(&mut r)).unwrap();
+        let rk = read_32_bytes(&mut r).try_into().unwrap();
+        let cmx = crate::note::ExtractedNoteCommitment::from_bytes(&read_32_bytes(&mut r)).unwrap();
+        let enable_spend = read_bool(&mut r);
+        let enable_output = read_bool(&mut r);
+        let disable_cross_address = read_bool(&mut r);
+        let instance = Instance::from_parts(
+            anchor,
+            cv_net,
+            nf_old,
+            rk,
+            cmx,
+            enable_spend,
+            enable_output,
+            disable_cross_address,
+        )
+        .expect("test vectors were generated with non-identity rk");
+
+        let mut proof_bytes = vec![];
+        r.read_to_end(&mut proof_bytes)?;
+        let proof = Proof::new(proof_bytes);
+
+        Ok((instance, proof))
+    }
+
+    // Pinned Ironwood proofs, one for each disableCrossAddress polarity. The restricted
+    // fixture also pins the instance encoding with row 9 = 1. Set
+    // ORCHARD_CIRCUIT_TEST_GENERATE_NEW_PROOF to regenerate both fixtures.
+    #[test]
+    fn serialized_ironwood_proof_test_case() {
+        let vk = VerifyingKey::build_for_version(OrchardCircuitVersion::Ironwood);
+
+        // (disableCrossAddress, output to the spent note's address, fixture path)
+        let cases = [
+            (
+                false,
+                false,
+                "src/circuit_data/circuit_proof_test_case_ironwood_ordinary.bin",
+            ),
+            (
+                true,
+                true,
+                "src/circuit_data/circuit_proof_test_case_ironwood_restricted.bin",
+            ),
+        ];
+
+        if std::env::var_os("ORCHARD_CIRCUIT_TEST_GENERATE_NEW_PROOF").is_some() {
+            let pk = ProvingKey::build_for_version(OrchardCircuitVersion::Ironwood);
+            for (disable_cross_address, output_to_spend_address, path) in cases {
+                let mut rng = OsRng;
+                let (circuit, instance) = generate_circuit_instance_with(
+                    &mut rng,
+                    OrchardCircuitVersion::Ironwood,
+                    disable_cross_address,
+                    output_to_spend_address,
+                );
+                let instances = core::slice::from_ref(&instance);
+
+                let proof = Proof::create(&pk, &[circuit], instances, &mut rng).unwrap();
+                assert!(proof.verify(&vk, instances).is_ok());
+
+                let file = std::fs::File::create(path).expect("can create fixture file");
+                write_ironwood_test_case(file, &instance, &proof)
+                    .expect("should be able to write new proof");
+            }
+            // Regeneration only writes the fixtures; the non-generate run below embeds
+            // and verifies them.
+            return;
+        }
+
+        for (disable_cross_address, test_case_bytes) in [
+            (
+                false,
+                &include_bytes!("circuit_data/circuit_proof_test_case_ironwood_ordinary.bin")[..],
+            ),
+            (
+                true,
+                &include_bytes!("circuit_data/circuit_proof_test_case_ironwood_restricted.bin")[..],
+            ),
+        ] {
+            let (instance, proof) =
+                read_ironwood_test_case(test_case_bytes).expect("proof must be valid");
+            assert_eq!(instance.disable_cross_address(), disable_cross_address);
+            assert_eq!(proof.0.len(), Proof::expected_proof_size(1));
+            assert!(proof.verify(&vk, &[instance]).is_ok());
+        }
+    }
+
     // TODO: recast as a proptest
     #[test]
     fn round_trip() {
@@ -1721,6 +1848,135 @@ mod tests {
             OrchardCircuitVersion::InsecurePreNu6_2,
             OrchardCircuitVersion::FixedPostNu6_2,
         );
+        proof_is_bound_to_circuit_version(
+            OrchardCircuitVersion::FixedPostNu6_2,
+            OrchardCircuitVersion::Ironwood,
+        );
+        proof_is_bound_to_circuit_version(
+            OrchardCircuitVersion::Ironwood,
+            OrchardCircuitVersion::FixedPostNu6_2,
+        );
+    }
+
+    // The legacy circuits leave instance row 9 (disableCrossAddress) unconstrained, so a
+    // freshly created legacy proof can satisfy a restricted statement at the raw halo2
+    // level without enforcing anything about addresses. This test documents that hazard
+    // and pins the API checks that close it: restricted statements are rejected for keys
+    // whose circuit version does not constrain the flag.
+    #[test]
+    fn restricted_statement_requires_ironwood_key() {
+        use halo2_proofs::transcript::{Blake2bRead, Blake2bWrite};
+
+        let mut rng = OsRng;
+
+        // A statement claiming disableCrossAddress = 1, with a cross-address witness for
+        // the *fixed* (legacy) circuit.
+        let (circuit, instance) = generate_circuit_instance_with(
+            &mut rng,
+            OrchardCircuitVersion::FixedPostNu6_2,
+            true,
+            false,
+        );
+
+        let pk = ProvingKey::build();
+        let vk = VerifyingKey::build();
+
+        let raw_verify = |instance: &Instance, proof_bytes: &[u8]| {
+            let instances = instance.to_halo2_instance();
+            let instances: Vec<_> = instances.iter().map(|i| &i[..]).collect();
+            let instances = [&instances[..]];
+
+            let strategy = super::SingleVerifier::new(&vk.params);
+            let mut transcript = Blake2bRead::init(proof_bytes);
+            super::plonk::verify_proof(&vk.params, &vk.vk, strategy, &instances, &mut transcript)
+        };
+
+        // Demonstrate the hazard: the raw proof satisfies the restricted statement
+        // under the legacy key, despite the legacy circuit not enforcing the
+        // restriction.
+        {
+            let instances = instance.to_halo2_instance();
+            let instances: Vec<_> = instances.iter().map(|i| &i[..]).collect();
+            let instances = [&instances[..]];
+
+            let mut transcript = Blake2bWrite::<_, pasta_curves::vesta::Affine, _>::init(vec![]);
+            super::plonk::create_proof(
+                &pk.params,
+                &pk.pk,
+                core::slice::from_ref(&circuit),
+                &instances,
+                &mut rng,
+                &mut transcript,
+            )
+            .unwrap();
+            let proof_bytes = transcript.finalize();
+
+            assert!(raw_verify(&instance, &proof_bytes).is_ok());
+        }
+
+        // The API refuses to create such a proof...
+        assert!(matches!(
+            Proof::create(
+                &pk,
+                core::slice::from_ref(&circuit),
+                &[instance.clone()],
+                &mut rng
+            ),
+            Err(super::plonk::Error::InvalidInstances),
+        ));
+
+        // ...and refuses to verify restricted statements with a legacy key.
+        let (frozen_instance, frozen_proof) = {
+            let test_case_bytes = include_bytes!("circuit_data/circuit_proof_test_case_fixed.bin");
+            read_test_case(&test_case_bytes[..]).expect("proof must be valid")
+        };
+        let restricted = Instance {
+            disable_cross_address: true,
+            ..frozen_instance
+        };
+        assert!(matches!(
+            frozen_proof.verify(&vk, core::slice::from_ref(&restricted)),
+            Err(super::plonk::Error::InvalidInstances),
+        ));
+
+        // (An *honest* legacy proof was created over instance row 9 = 0, so it also
+        // fails cryptographically against the restricted statement; the API check above
+        // fires before any cryptographic work.)
+        assert!(raw_verify(&restricted, frozen_proof.as_ref()).is_err());
+    }
+
+    // The pinned Ironwood verifying key. Like `round_trip` for the fixed circuit, set
+    // ORCHARD_CIRCUIT_TEST_GENERATE_NEW_PROOF to regenerate it (along with the Ironwood
+    // proof fixtures; see `serialized_ironwood_proof_test_case`).
+    #[test]
+    fn ironwood_round_trip() {
+        let vk = VerifyingKey::build_for_version(OrchardCircuitVersion::Ironwood);
+
+        if std::env::var_os("ORCHARD_CIRCUIT_TEST_GENERATE_NEW_PROOF").is_some() {
+            std::fs::write(
+                "src/circuit_data/circuit_description_ironwood",
+                format!("{:#?}\n", vk.vk.pinned()),
+            )
+            .expect("should be able to write new circuit description");
+        } else {
+            assert_eq!(
+                format!("{:#?}\n", vk.vk.pinned()),
+                include_str!("circuit_data/circuit_description_ironwood").replace("\r\n", "\n")
+            );
+        }
+
+        // The Ironwood circuit shares the legacy constraint system (the cross-address
+        // checks reuse the q_orchard gate), so its CircuitCost — and therefore its proof
+        // size — is identical to the legacy circuits'. `ironwood_proof_size_unchanged`
+        // pins the size of real proofs; this pins the cost model.
+        let circuit = Circuit {
+            circuit_version: OrchardCircuitVersion::Ironwood,
+            ..Default::default()
+        };
+        let circuit_cost =
+            halo2_proofs::dev::CircuitCost::<pasta_curves::vesta::Point, _>::measure(K, &circuit);
+        assert_eq!(usize::from(circuit_cost.proof_size(1)), 4992);
+        assert_eq!(usize::from(circuit_cost.proof_size(2)), 7264);
     }
 
     // Proving a circuit with a proving key for a different circuit version is a misuse: the

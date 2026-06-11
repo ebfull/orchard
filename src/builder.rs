@@ -1795,6 +1795,31 @@ mod tests {
     }
 
     #[test]
+    fn ironwood_coinbase_builds() {
+        let mut rng = OsRng;
+
+        let sk = SpendingKey::random(&mut rng);
+        let fvk = FullViewingKey::from(&sk);
+        let recipient = fvk.address_at(0u32, Scope::External);
+
+        // Coinbase bundles permit cross-address transfers (all of their spends are
+        // dummies), so they build under the Ironwood circuit version without any flag
+        // adjustments.
+        let mut builder = Builder::new_for_version(
+            BundleType::Coinbase,
+            EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
+            OrchardCircuitVersion::Ironwood,
+        );
+        builder
+            .add_output(None, recipient, NoteValue::from_raw(5000), [0u8; 512])
+            .unwrap();
+
+        let (bundle, _) = builder.build::<i64>(&mut rng).unwrap().unwrap();
+        assert_eq!(bundle.actions().len(), 1);
+        assert_eq!(bundle.circuit_version(), OrchardCircuitVersion::Ironwood);
+    }
+
+    #[test]
     fn cross_address_disabled_rejects_non_change_outputs() {
         let mut rng = OsRng;
 

@@ -5,6 +5,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `orchard::circuit::OrchardCircuitVersion::Ironwood`, the NU6.3 circuit. It
+  shares the legacy circuit versions' constraint system (so the proof size is
+  unchanged), and additionally constrains each action against the new
+  `disableCrossAddress` public input: when the flag is 1, the action's created
+  note must be addressed to the same `(g_d, pk_d)` as its spent note.
+- `orchard::circuit::OrchardCircuitVersion::supports_cross_address_restriction`,
+  whether a circuit version constrains the `disableCrossAddress` flag.
+- `orchard::circuit::VerifyingKey::circuit_version`, the version the verifying
+  key verifies proofs for.
+- `orchard::bundle::Flags::CROSS_ADDRESS_DISABLED`, the flag set with spends and
+  outputs enabled and cross-address transfers disabled.
+- `orchard::bundle::Flags::cross_address_disabled`
+- `orchard::bundle::Flags::from_byte_ironwood`, which parses the flag byte of
+  NU6.3 (Ironwood) transaction formats, in which bit 2 is the
+  `disableCrossAddress` flag. `Flags::from_byte` is unchanged and continues to
+  enforce the pre-NU6.3 reserved-bits rule. Bit 2 is era-uniform: a clear bit
+  means cross-address transfers are permitted in every transaction format, so
+  `Flags::to_byte` remains the single serializer.
+- `orchard::bundle::BundleFormat`, naming the transaction-format generation a
+  bundle is encoded in; used as parse context.
+- `orchard::builder::Builder::add_change_output` and
+  `orchard::builder::OutputInfo::change`, which add a wallet-controlled change
+  output. This is the only way to retain shielded value in a bundle that
+  disables cross-address transfers: the builder pairs the change output with a
+  fabricated zero-value spend controlled by the wallet at the change address,
+  and the fabricated spend is signed through the normal signing flow.
+- `orchard::pczt::Bundle::verify_cross_address_restriction`, which verifies
+  that every action of a bundle disabling cross-address transfers outputs to
+  the address it spends from. Signers presented with such a bundle should call
+  it before signing.
+- New error variants:
+  - `orchard::builder::BuildError::{CircuitVersionMismatch, CrossAddressDisabled}`
+  - `orchard::builder::OutputError::{CrossAddressDisabled, FvkMismatch}`
+  - `orchard::pczt::ProverError::{CircuitVersionMismatch, DisallowedCrossAddressTransfer}`
+  - `orchard::pczt::VerifyError::DisallowedCrossAddressTransfer`
+
+### Changed
+- `orchard::circuit::Instance` now always encodes a `disableCrossAddress` row
+  (instance row 9). Instance columns are zero-padded over the evaluation
+  domain, so for pre-Ironwood statements — where the flag is always zero — this
+  encoding is commitment-identical to the historical nine-row encoding, and the
+  legacy verifying keys prove and verify it unchanged.
+- `orchard::circuit::Instance::from_parts` takes a `disable_cross_address`
+  argument.
+- `orchard::circuit::Proof::create` and `orchard::circuit::Proof::verify`
+  reject statements that disable cross-address transfers when the key's
+  circuit version does not constrain the `disableCrossAddress` flag, with
+  `halo2_proofs::plonk::Error::InvalidInstances`; the legacy circuits leave the
+  flag's instance row unconstrained, so a key for them cannot enforce — and
+  must not be asked to attest to — the restriction.
+  `orchard::bundle::BatchValidator::validate` returns `false` in the same
+  situation.
+- `orchard::bundle::Flags::from_parts` takes a `cross_address_disabled`
+  argument.
+- `orchard::builder::BundleType::num_actions` counts `num_spends + num_outputs`
+  for bundles that disable cross-address transfers: every action's output is
+  addressed to the note it spends, so a requested spend and a requested output
+  never share an action.
+- `orchard::builder::Builder` builds bundles that disable cross-address
+  transfers from intentionally paired actions: each requested spend is paired
+  with a fabricated zero-value output to the spent note's own address, each
+  wallet-controlled change output with a fabricated zero-value spend at the
+  change address, and padding actions pair a dummy spend with an output to the
+  dummy's own address. Only complete pairs are shuffled. `Builder::add_output`
+  rejects ordinary outputs for such bundles, and building them requires
+  `OrchardCircuitVersion::Ironwood`.
+- `orchard::pczt::Bundle::parse` takes the `BundleFormat` of the transaction
+  the PCZT targets, which selects how the flag byte is interpreted.
+- `orchard::pczt::Bundle::create_proof` builds the Action circuits for the
+  proving key's circuit version, and checks restricted bundles structurally
+  (every action outputs to the address it spends from) before synthesizing any
+  circuit.
+
 ## [0.14.0] - 2026-06-02
 
 ### Added

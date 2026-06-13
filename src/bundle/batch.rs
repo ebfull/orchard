@@ -65,7 +65,6 @@ mod tests {
         for circuit_version in [
             OrchardCircuitVersion::InsecurePreNu6_2,
             OrchardCircuitVersion::FixedPostNu6_2,
-            OrchardCircuitVersion::Ironwood,
         ] {
             let vk = VerifyingKey::build(circuit_version);
             let mut validator = BatchValidator::new(&vk);
@@ -74,6 +73,11 @@ mod tests {
                 Err(BatchError::CrossAddressUnsupported)
             );
         }
+
+        // The Ironwood key supports the restriction, so the bundle is accepted.
+        let vk = VerifyingKey::build(OrchardCircuitVersion::Ironwood);
+        let mut validator = BatchValidator::new(&vk);
+        assert_eq!(validator.add_bundle(&bundle, [0; 32]), Ok(()));
     }
 
     #[test]

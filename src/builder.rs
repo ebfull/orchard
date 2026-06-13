@@ -1915,8 +1915,8 @@ mod tests {
         let mut rng = OsRng;
 
         for circuit_version in [
+            OrchardCircuitVersion::InsecurePreNu6_2,
             OrchardCircuitVersion::FixedPostNu6_2,
-            OrchardCircuitVersion::Ironwood,
         ] {
             let builder = Builder::new(
                 restricted_bundle_type(true),
@@ -1935,5 +1935,16 @@ mod tests {
                 )),
             ));
         }
+
+        let builder = Builder::new(
+            restricted_bundle_type(true),
+            EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
+        );
+        let (bundle, _) = builder
+            .build::<i64>(&mut rng, OrchardCircuitVersion::Ironwood)
+            .unwrap()
+            .unwrap();
+        let pk = ProvingKey::build(OrchardCircuitVersion::Ironwood);
+        bundle.create_proof(&pk, &mut rng).unwrap();
     }
 }

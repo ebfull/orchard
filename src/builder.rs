@@ -51,6 +51,21 @@ pub enum BundleType {
     /// A coinbase bundle disables nonzero Orchard spends, and is built with
     /// [`Flags::SPENDS_DISABLED`]: spends disabled, outputs enabled, and
     /// cross-address transfers enabled. No padding is performed.
+    ///
+    /// The cross-address restriction is not a useful way to express coinbase. An
+    /// Orchard action always has a spend half and an output half; with spends disabled,
+    /// the spend half is zero-valued dummy/fabricated spend data. If cross-address
+    /// transfers were also disabled, every output would need to be addressed to the
+    /// same receiver as that dummy spend, so a coinbase bundle could not pay an
+    /// arbitrary recipient.
+    ///
+    /// Therefore coinbase bundles always enable cross-address transfers. Under NU6.3
+    /// encoding this sets bit 2; if the same flag byte is interpreted by a pre-NU6.3
+    /// parser, it is rejected as a nonzero reserved bit. Whether an Orchard-format
+    /// shielded coinbase bundle is permitted at all is a consensus rule outside this
+    /// crate, decided per pool: a pool may allow unrestricted bundles, while a pool
+    /// whose rules require the cross-address restriction on every bundle thereby
+    /// prohibits coinbase bundles entirely.
     Coinbase,
 }
 
@@ -77,9 +92,13 @@ impl BundleType {
     /// transfers, a requested spend and a requested output never share an action (each
     /// is paired with a fabricated zero-value counterpart), so the number of requested
     /// actions is `num_spends + num_outputs` rather than `max(num_spends, num_outputs)`.
+    /// Wallets estimating fees (e.g. per [ZIP 317]) must account for this larger action
+    /// count.
     ///
     /// Returns an error if the specified number of spends and outputs is incompatible with
     /// this bundle type.
+    ///
+    /// [ZIP 317]: https://zips.z.cash/zip-0317
     pub fn num_actions(
         &self,
         num_spends: usize,
@@ -576,12 +595,12 @@ impl ActionInfo {
 #[cfg(feature = "circuit")]
 pub type UnauthorizedBundle<V> = Bundle<InProgress<Unproven, Unauthorized>, V>;
 
-/// Metadata about a bundle created by [`bundle`] or [`Builder::build`] that is not
-/// necessarily recoverable from the bundle itself.
+/// Metadata about a bundle created by [`bundle`] or [`Builder::build`] that is not necessarily
+/// recoverable from the bundle itself.
 ///
 /// This includes information about how [`Action`]s within the bundle are ordered (after
-/// padding and randomization) relative to the order in which spends and outputs were
-/// provided (to [`bundle`]), or the order in which [`Builder`] mutations were performed.
+/// padding and randomization) relative to the order in which spends and outputs were provided
+/// (to [`bundle`]), or the order in which [`Builder`] mutations were performed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleMetadata {
     spend_indices: Vec<usize>,
@@ -664,7 +683,7 @@ impl Builder {
     ///
     /// In a bundle that disables cross-address transfers, each spend is paired with a
     /// fabricated zero-value output encrypted to the spent note's own address. The
-    /// wallet that owns the spent note will trial-decrypt that output when scanning
+    /// wallet that owns the spent note **will** trial-decrypt that output when scanning
     /// the chain, as a zero-value note with an all-zero memo field; wallets should
     /// expect and tolerate these notes.
     ///
@@ -1139,6 +1158,15 @@ pub struct Unproven {
 #[cfg(feature = "circuit")]
 impl<S: InProgressSignatures> InProgress<Unproven, S> {
     /// Creates the proof for this bundle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`halo2_proofs::plonk::Error::InvalidInstances`] if any provided
+    /// instance has `disableCrossAddress = 1` and `pk` is not an
+    /// [`OrchardCircuitVersion::Ironwood`] proving key.
+    ///
+    /// Also returns an error if `pk` does not match the circuit version this
+    /// bundle's actions were built for, or if proof creation fails.
     pub fn create_proof(
         &self,
         pk: &ProvingKey,
@@ -1158,6 +1186,16 @@ impl<S: InProgressSignatures, V> Bundle<InProgress<Unproven, S>, V> {
     }
 
     /// Creates the proof for this bundle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::Proof`] containing
+    /// [`halo2_proofs::plonk::Error::InvalidInstances`] if this bundle disables
+    /// cross-address transfers and `pk` is not an
+    /// [`OrchardCircuitVersion::Ironwood`] proving key.
+    ///
+    /// Also returns an error if `pk` does not match this bundle's
+    /// [`circuit_version`](Self::circuit_version), or if proof creation fails.
     pub fn create_proof(
         self,
         pk: &ProvingKey,
@@ -1557,15 +1595,15 @@ mod tests {
     use super::{bundle, BuildError, Builder, MaybeSigned, OutputError, OutputInfo};
     use crate::{
         builder::BundleType,
-        bundle::{Authorized, Bundle, Flags},
+        bundle::{Authorized, Bundle, BundleFormat, Flags},
         circuit::{OrchardCircuitVersion, ProvingKey},
         constants::MERKLE_DEPTH_ORCHARD,
         keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendingKey},
         note::{Nullifier, Rho},
         pczt::{ProverError, VerifyError},
-        tree::{Anchor, MerklePath, EMPTY_ROOTS},
+        tree::{MerklePath, EMPTY_ROOTS},
         value::NoteValue,
-        Address, Note,
+        Address, Anchor, Note,
     };
 
     fn note_with_path(
@@ -1588,23 +1626,26 @@ mod tests {
         }
     }
 
+    /// Creates a builder of the given bundle type over the empty-tree anchor, with a
+    /// single 5000-zat output to a freshly derived external address.
+    fn output_only_builder(rng: &mut impl RngCore, bundle_type: BundleType) -> Builder {
+        let sk = SpendingKey::random(rng);
+        let fvk = FullViewingKey::from(&sk);
+        let recipient = fvk.address_at(0u32, Scope::External);
+
+        let mut builder = Builder::new(bundle_type, EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into());
+        builder
+            .add_output(None, recipient, NoteValue::from_raw(5000), [0u8; 512])
+            .expect("output-only builders accept ordinary outputs");
+        builder
+    }
+
     #[test]
     fn shielding_bundle() {
         let pk = ProvingKey::build(OrchardCircuitVersion::FixedPostNu6_2);
         let mut rng = OsRng;
 
-        let sk = SpendingKey::random(&mut rng);
-        let fvk = FullViewingKey::from(&sk);
-        let recipient = fvk.address_at(0u32, Scope::External);
-
-        let mut builder = Builder::new(
-            BundleType::DEFAULT,
-            EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
-        );
-
-        builder
-            .add_output(None, recipient, NoteValue::from_raw(5000), [0u8; 512])
-            .unwrap();
+        let builder = output_only_builder(&mut rng, BundleType::DEFAULT);
         let balance: i64 = builder.value_balance().unwrap();
         assert_eq!(balance, -5000);
 
@@ -1619,6 +1660,45 @@ mod tests {
             .finalize()
             .unwrap();
         assert_eq!(bundle.value_balance(), &(-5000))
+    }
+
+    #[test]
+    fn coinbase_bundle_builds_for_ironwood() {
+        let mut rng = OsRng;
+
+        // Coinbase bundles disable nonzero Orchard spends, but the action spend
+        // halves are still present as zero-valued dummy/fabricated spend data. A
+        // cross-address-restricted coinbase bundle would have to address each output
+        // to its dummy spend's receiver, so coinbase always uses unrestricted
+        // cross-address semantics. A pool whose rules require the cross-address
+        // restriction on every bundle prohibits coinbase outside this crate.
+        let builder = output_only_builder(&mut rng, BundleType::Coinbase);
+
+        let (bundle, _) = builder
+            .build::<i64>(&mut rng, OrchardCircuitVersion::Ironwood)
+            .expect("coinbase bundles build under the Ironwood circuit version")
+            .expect("a bundle is produced for the requested output");
+        assert_eq!(bundle.actions().len(), 1);
+        assert_eq!(bundle.circuit_version(), OrchardCircuitVersion::Ironwood);
+        assert!(!bundle.flags().spends_enabled());
+        assert!(bundle.flags().outputs_enabled());
+        assert!(bundle.flags().cross_address_enabled());
+    }
+
+    #[test]
+    fn coinbase_bundle_type_uses_spends_disabled_flags() {
+        assert_eq!(BundleType::Coinbase.flags(), Flags::SPENDS_DISABLED);
+        assert!(BundleType::Coinbase.flags().cross_address_enabled());
+        // Post-NU6.3 coinbase bundles set bit 2 of the flag byte, so pre-NU6.3
+        // parsers reject them under the reserved-bits rule.
+        assert_eq!(
+            BundleType::Coinbase.flags().to_byte(BundleFormat::Nu6_3),
+            Some(0b110)
+        );
+        assert_eq!(
+            BundleType::Coinbase.flags().to_byte(BundleFormat::PreNu6_3),
+            Some(0b010)
+        );
     }
 
     #[test]
@@ -1680,7 +1760,11 @@ mod tests {
         assert_ne!(spend_action_index, change_action_index);
 
         let spend_action = &pczt_bundle.actions()[spend_action_index];
-        assert_eq!(spend_action.spend.recipient, Some(spend_recipient));
+        assert_eq!(
+            spend_action.spend.recipient,
+            Some(spend_recipient),
+            "the real spend remains at the spent note's address"
+        );
         assert_eq!(spend_action.spend.value, Some(NoteValue::from_raw(15_000)));
         assert!(spend_action.spend.dummy_sk.is_none());
         assert_eq!(spend_action.output.recipient, Some(spend_recipient));
@@ -1760,7 +1844,7 @@ mod tests {
                     NoteValue::from_raw(5_000),
                     [0u8; 512],
                 )],
-                OrchardCircuitVersion::FixedPostNu6_2,
+                OrchardCircuitVersion::Ironwood,
             ),
             Err(BuildError::CrossAddressDisabled)
         ));
@@ -1774,7 +1858,7 @@ mod tests {
             restricted_bundle_type(false),
             vec![],
             vec![change_output],
-            OrchardCircuitVersion::FixedPostNu6_2,
+            OrchardCircuitVersion::Ironwood,
         )
         .unwrap()
         .unwrap();
@@ -1808,7 +1892,7 @@ mod tests {
             .unwrap();
 
         let bundle = builder
-            .build::<i64>(&mut rng, OrchardCircuitVersion::FixedPostNu6_2)
+            .build::<i64>(&mut rng, OrchardCircuitVersion::Ironwood)
             .unwrap()
             .unwrap()
             .0;
@@ -1850,7 +1934,7 @@ mod tests {
             .unwrap();
 
         let bundle = builder
-            .build::<i64>(&mut rng, OrchardCircuitVersion::FixedPostNu6_2)
+            .build::<i64>(&mut rng, OrchardCircuitVersion::Ironwood)
             .unwrap()
             .unwrap()
             .0
@@ -1864,7 +1948,7 @@ mod tests {
 
     #[test]
     fn restricted_pczt_structural_checks_reject_tampering() {
-        let pk = ProvingKey::build(OrchardCircuitVersion::FixedPostNu6_2);
+        let pk = ProvingKey::build(OrchardCircuitVersion::Ironwood);
         let mut rng = OsRng;
         let spend_sk = SpendingKey::random(&mut rng);
         let spend_fvk = FullViewingKey::from(&spend_sk);
@@ -1889,6 +1973,7 @@ mod tests {
 
         let (mut pczt_bundle, _) = builder.build_for_pczt(&mut rng).unwrap();
         pczt_bundle.verify_cross_address_restriction().unwrap();
+        pczt_bundle.create_proof(&pk, rng).unwrap();
 
         let spend_recipient = pczt_bundle.actions()[0].spend.recipient.unwrap();
         let other_recipient = loop {
@@ -1911,40 +1996,38 @@ mod tests {
     }
 
     #[test]
-    fn restricted_bundle_proof_rejected_by_existing_keys() {
-        let mut rng = OsRng;
+    fn create_proof_supports_cross_address_disabled_only_for_ironwood() {
+        let build_bundle = |rng: &mut OsRng, circuit_version: OrchardCircuitVersion| {
+            let flags = Flags::CROSS_ADDRESS_DISABLED;
 
-        for circuit_version in [
-            OrchardCircuitVersion::InsecurePreNu6_2,
-            OrchardCircuitVersion::FixedPostNu6_2,
-        ] {
             let builder = Builder::new(
-                restricted_bundle_type(true),
+                BundleType::Transactional {
+                    flags,
+                    bundle_required: true,
+                },
                 EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
             );
-            let (bundle, _) = builder
-                .build::<i64>(&mut rng, circuit_version)
+
+            builder
+                .build::<i64>(rng, circuit_version)
                 .unwrap()
-                .unwrap();
+                .unwrap()
+                .0
+        };
 
-            let pk = ProvingKey::build(circuit_version);
-            assert!(matches!(
-                bundle.create_proof(&pk, &mut rng),
-                Err(BuildError::Proof(
-                    halo2_proofs::plonk::Error::InvalidInstances
-                )),
-            ));
-        }
+        let mut rng = OsRng;
+        let pk = ProvingKey::build(OrchardCircuitVersion::FixedPostNu6_2);
+        let bundle = build_bundle(&mut rng, OrchardCircuitVersion::FixedPostNu6_2);
 
-        let builder = Builder::new(
-            restricted_bundle_type(true),
-            EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
-        );
-        let (bundle, _) = builder
-            .build::<i64>(&mut rng, OrchardCircuitVersion::Ironwood)
-            .unwrap()
-            .unwrap();
+        assert!(matches!(
+            bundle.create_proof(&pk, &mut rng),
+            Err(BuildError::Proof(
+                halo2_proofs::plonk::Error::InvalidInstances
+            )),
+        ));
+
         let pk = ProvingKey::build(OrchardCircuitVersion::Ironwood);
+        let bundle = build_bundle(&mut rng, OrchardCircuitVersion::Ironwood);
         bundle.create_proof(&pk, &mut rng).unwrap();
     }
 }

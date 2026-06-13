@@ -119,7 +119,7 @@ impl BundleType {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum BuildError {
-    /// Spends are disabled for the provided bundle type.
+    /// Outputs are disabled for the provided bundle type.
     SpendsDisabled,
     /// Spends are disabled for the provided bundle type.
     OutputsDisabled,
@@ -156,7 +156,9 @@ impl fmt::Display for BuildError {
                 f.write_str("Bundle structure did not conform to requested bundle type.")
             }
             SpendsDisabled => f.write_str("Spends are not enabled for the requested bundle type."),
-            OutputsDisabled => f.write_str("Spends are not enabled for the requested bundle type."),
+            OutputsDisabled => {
+                f.write_str("Outputs are not enabled for the requested bundle type.")
+            }
             AnchorMismatch => {
                 f.write_str("All spends must share the anchor requested for the transaction.")
             }

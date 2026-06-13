@@ -340,20 +340,23 @@ mod tests {
 
     use crate::{
         builder::{Builder, BundleType},
+        bundle::{BundleFormat, Flags},
         circuit::{OrchardCircuitVersion, ProvingKey},
         constants::MERKLE_DEPTH_ORCHARD,
         keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendingKey},
         note::{ExtractedNoteCommitment, RandomSeed, Rho},
-        pczt::{ProverError, TxExtractorError, Zip32Derivation},
+        pczt::{
+            IoFinalizerError, ParseError, ProverError, TxExtractorError, VerifyError,
+            Zip32Derivation,
+        },
         primitives::redpallas::{self, SpendAuth},
         tree::{MerkleHashOrchard, EMPTY_ROOTS},
         value::NoteValue,
         Note,
     };
 
-    /// Builds a minimal shielding-style pczt bundle, finalizes IO, and returns
-    /// it ready for `create_proof`. Used by identity-`rk` tests below.
-    fn minimal_finalized_pczt_bundle(mut rng: OsRng) -> super::Bundle {
+    /// Builds a minimal shielding-style pczt bundle.
+    fn minimal_pczt_bundle(mut rng: OsRng) -> super::Bundle {
         let sk = SpendingKey::random(&mut rng);
         let fvk = FullViewingKey::from(&sk);
         let recipient = fvk.address_at(0u32, Scope::External);
@@ -365,7 +368,13 @@ mod tests {
         builder
             .add_output(None, recipient, NoteValue::from_raw(5000), [0u8; 512])
             .unwrap();
-        let mut pczt_bundle = builder.build_for_pczt(&mut rng).unwrap().0;
+        builder.build_for_pczt(&mut rng).unwrap().0
+    }
+
+    /// Builds a minimal shielding-style pczt bundle, finalizes IO, and returns
+    /// it ready for `create_proof`. Used by identity-`rk` tests below.
+    fn minimal_finalized_pczt_bundle(rng: OsRng) -> super::Bundle {
+        let mut pczt_bundle = minimal_pczt_bundle(rng);
 
         let sighash = [0; 32];
         pczt_bundle.finalize_io(sighash, rng).unwrap();
@@ -577,5 +586,134 @@ mod tests {
             pczt_bundle.extract::<i64>(),
             Err(TxExtractorError::NonCanonicalProofSize { .. }),
         ));
+    }
+
+    #[test]
+    fn parse_uses_bundle_format_for_flags() {
+        let anchor: crate::Anchor = EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into();
+
+        assert!(matches!(
+            super::Bundle::parse(
+                vec![],
+                0b0000_0100,
+                BundleFormat::PreNu6_3,
+                (0, false),
+                anchor.to_bytes(),
+                None,
+                None,
+            ),
+            Err(ParseError::UnexpectedFlagBitsSet),
+        ));
+
+        let parsed = super::Bundle::parse(
+            vec![],
+            0b0000_0100,
+            BundleFormat::Nu6_3,
+            (0, false),
+            anchor.to_bytes(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(parsed.flags().cross_address_enabled());
+        assert_eq!(
+            parsed.flags().to_byte(BundleFormat::Nu6_3),
+            Some(0b0000_0100)
+        );
+        assert_eq!(
+            parsed.flags().to_byte(BundleFormat::PreNu6_3),
+            Some(0b0000_0000)
+        );
+
+        let restricted = super::Bundle::parse(
+            vec![],
+            0b0000_0011,
+            BundleFormat::Nu6_3,
+            (0, false),
+            anchor.to_bytes(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(!restricted.flags().cross_address_enabled());
+        assert_eq!(
+            restricted.flags().to_byte(BundleFormat::Nu6_3),
+            Some(0b0000_0011)
+        );
+        assert_eq!(restricted.flags().to_byte(BundleFormat::PreNu6_3), None);
+    }
+
+    #[test]
+    fn create_proof_rejects_cross_address_violation() {
+        let pk = ProvingKey::build(OrchardCircuitVersion::FixedPostNu6_2);
+        let rng = OsRng;
+
+        let mut pczt_bundle = minimal_finalized_pczt_bundle(rng);
+        pczt_bundle.flags = Flags::CROSS_ADDRESS_DISABLED;
+
+        assert!(matches!(
+            pczt_bundle.create_proof(&pk, rng),
+            Err(ProverError::DisallowedCrossAddressTransfer),
+        ));
+        assert!(pczt_bundle.zkproof.is_none());
+    }
+
+    #[test]
+    fn finalize_io_rejects_cross_address_violation() {
+        let rng = OsRng;
+        let mut pczt_bundle = minimal_pczt_bundle(rng);
+        pczt_bundle.flags = Flags::CROSS_ADDRESS_DISABLED;
+
+        assert!(matches!(
+            pczt_bundle.finalize_io([0; 32], rng),
+            Err(IoFinalizerError::CrossAddressRestriction(
+                VerifyError::DisallowedCrossAddressTransfer
+            )),
+        ));
+        // The failed call left the bundle unmodified.
+        assert!(pczt_bundle.bsk.is_none());
+    }
+
+    #[test]
+    fn verify_cross_address_restriction_requires_recipients() {
+        let mut pczt_bundle = minimal_finalized_pczt_bundle(OsRng);
+        pczt_bundle.flags = Flags::CROSS_ADDRESS_DISABLED;
+        for action in pczt_bundle.actions_mut() {
+            action.output.recipient = action.spend.recipient;
+        }
+        pczt_bundle.verify_cross_address_restriction().unwrap();
+
+        let original = pczt_bundle.actions()[0].spend.recipient;
+        pczt_bundle.actions_mut()[0].spend.recipient = None;
+        assert!(matches!(
+            pczt_bundle.verify_cross_address_restriction(),
+            Err(VerifyError::MissingRecipient),
+        ));
+
+        pczt_bundle.actions_mut()[0].spend.recipient = original;
+        pczt_bundle.actions_mut()[0].output.recipient = None;
+        assert!(matches!(
+            pczt_bundle.verify_cross_address_restriction(),
+            Err(VerifyError::MissingRecipient),
+        ));
+    }
+
+    #[test]
+    fn extract_preserves_cross_address_disabled() {
+        let rng = OsRng;
+
+        let mut pczt_bundle = minimal_finalized_pczt_bundle(rng);
+        pczt_bundle.zkproof = Some(crate::Proof::new(vec![
+            0;
+            crate::Proof::expected_proof_size(
+                pczt_bundle.actions.len()
+            )
+        ]));
+        pczt_bundle.flags = Flags::CROSS_ADDRESS_DISABLED;
+
+        let bundle = pczt_bundle.extract::<i64>().unwrap().unwrap();
+        assert!(!bundle.flags().cross_address_enabled());
     }
 }

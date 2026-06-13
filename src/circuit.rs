@@ -482,26 +482,16 @@ impl Config {
     }
 }
 
-impl plonk::Circuit<pallas::Base> for Circuit {
-    type Config = Config;
-    type FloorPlanner = floor_planner::V1;
-
-    fn without_witnesses(&self) -> Self {
-        Self::empty(self.circuit_version)
-    }
-
-    fn configure(meta: &mut plonk::ConstraintSystem<pallas::Base>) -> Self::Config {
-        Config::configure(meta)
-    }
-
+impl Circuit {
+    /// Synthesizes the Orchard Action checks common to every circuit version.
     #[allow(non_snake_case)]
-    fn synthesize(
+    fn synthesize_base(
         &self,
-        config: Self::Config,
-        mut layouter: impl Layouter<pallas::Base>,
+        config: &Config,
+        layouter: &mut impl Layouter<pallas::Base>,
     ) -> Result<(), plonk::Error> {
         // Load the Sinsemilla generator lookup table used by the whole circuit.
-        SinsemillaChip::load(config.sinsemilla_config_1.clone(), &mut layouter)?;
+        SinsemillaChip::load(config.sinsemilla_config_1.clone(), layouter)?;
 
         // Construct the ECC chip.
         let ecc_chip = config.ecc_chip(self.circuit_version.halo2_version());
@@ -863,6 +853,27 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         )?;
 
         Ok(())
+    }
+}
+
+impl plonk::Circuit<pallas::Base> for Circuit {
+    type Config = Config;
+    type FloorPlanner = floor_planner::V1;
+
+    fn without_witnesses(&self) -> Self {
+        Self::empty(self.circuit_version)
+    }
+
+    fn configure(meta: &mut plonk::ConstraintSystem<pallas::Base>) -> Self::Config {
+        Config::configure(meta)
+    }
+
+    fn synthesize(
+        &self,
+        config: Self::Config,
+        mut layouter: impl Layouter<pallas::Base>,
+    ) -> Result<(), plonk::Error> {
+        self.synthesize_base(&config, &mut layouter)
     }
 }
 

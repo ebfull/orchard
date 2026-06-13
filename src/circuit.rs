@@ -82,8 +82,8 @@ const NF_OLD: usize = 3;
 const RK_X: usize = 4;
 const RK_Y: usize = 5;
 const CMX: usize = 6;
-const ENABLE_SPEND: usize = 7;
-const ENABLE_OUTPUT: usize = 8;
+const ENABLE_SPENDS: usize = 7;
+const ENABLE_OUTPUTS: usize = 8;
 
 /// Configuration needed to use the Orchard Action circuit.
 #[derive(Clone, Debug)]
@@ -172,6 +172,36 @@ pub struct Circuit {
 }
 
 impl Circuit {
+    /// Returns an empty circuit with all private witnesses unknown.
+    ///
+    /// This is used for circuit shape-dependent operations, such as generating keys
+    /// or rendering the circuit layout, where witness values are not required but the
+    /// selected circuit version still determines the configured constraints.
+    fn empty(circuit_version: OrchardCircuitVersion) -> Self {
+        Circuit {
+            path: Value::unknown(),
+            pos: Value::unknown(),
+            g_d_old: Value::unknown(),
+            pk_d_old: Value::unknown(),
+            v_old: Value::unknown(),
+            rho_old: Value::unknown(),
+            psi_old: Value::unknown(),
+            rcm_old: Value::unknown(),
+            cm_old: Value::unknown(),
+            alpha: Value::unknown(),
+            ak: Value::unknown(),
+            nk: Value::unknown(),
+            rivk: Value::unknown(),
+            g_d_new: Value::unknown(),
+            pk_d_new: Value::unknown(),
+            v_new: Value::unknown(),
+            psi_new: Value::unknown(),
+            rcm_new: Value::unknown(),
+            rcv: Value::unknown(),
+            circuit_version,
+        }
+    }
+
     /// This constructor is public to enable creation of custom builders.
     /// If you are not creating a custom builder, use [`Builder`] to compose
     /// and authorize a transaction.
@@ -260,15 +290,9 @@ impl Circuit {
     }
 }
 
-impl plonk::Circuit<pallas::Base> for Circuit {
-    type Config = Config;
-    type FloorPlanner = floor_planner::V1;
-
-    fn without_witnesses(&self) -> Self {
-        Self::default()
-    }
-
-    fn configure(meta: &mut plonk::ConstraintSystem<pallas::Base>) -> Self::Config {
+impl Config {
+    /// Configures the Orchard Action constraint system shared by every circuit version.
+    fn configure(meta: &mut plonk::ConstraintSystem<pallas::Base>) -> Self {
         // Advice columns used in the Orchard circuit.
         let advices = [
             meta.advice_column(),
@@ -455,6 +479,19 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             old_note_commit_config,
             new_note_commit_config,
         }
+    }
+}
+
+impl plonk::Circuit<pallas::Base> for Circuit {
+    type Config = Config;
+    type FloorPlanner = floor_planner::V1;
+
+    fn without_witnesses(&self) -> Self {
+        Self::empty(self.circuit_version)
+    }
+
+    fn configure(meta: &mut plonk::ConstraintSystem<pallas::Base>) -> Self::Config {
+        Config::configure(meta)
     }
 
     #[allow(non_snake_case)]
@@ -808,7 +845,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 region.assign_advice_from_instance(
                     || "enable spends",
                     config.primary,
-                    ENABLE_SPEND,
+                    ENABLE_SPENDS,
                     config.advices[6],
                     0,
                 )?;
@@ -816,7 +853,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 region.assign_advice_from_instance(
                     || "enable outputs",
                     config.primary,
-                    ENABLE_OUTPUT,
+                    ENABLE_OUTPUTS,
                     config.advices[7],
                     0,
                 )?;
@@ -849,10 +886,7 @@ impl VerifyingKey {
     /// Builds the verifying key for the given circuit version.
     pub fn build_for_version(circuit_version: OrchardCircuitVersion) -> Self {
         let params = halo2_proofs::poly::commitment::Params::new(K);
-        let circuit = Circuit {
-            circuit_version,
-            ..Default::default()
-        };
+        let circuit = Circuit::empty(circuit_version);
 
         let vk = plonk::keygen_vk(&params, &circuit).unwrap();
 
@@ -884,10 +918,7 @@ impl ProvingKey {
     /// historical proofs (e.g. for testing that pre-NU6.2 proofs still verify).
     pub fn build_for_version(circuit_version: OrchardCircuitVersion) -> Self {
         let params = halo2_proofs::poly::commitment::Params::new(K);
-        let circuit = Circuit {
-            circuit_version,
-            ..Default::default()
-        };
+        let circuit = Circuit::empty(circuit_version);
 
         let vk = plonk::keygen_vk(&params, &circuit).unwrap();
         let pk = plonk::keygen_pk(&params, vk, &circuit).unwrap();
@@ -1011,8 +1042,8 @@ impl Instance {
         instance[RK_X] = *rk.x();
         instance[RK_Y] = *rk.y();
         instance[CMX] = self.cmx.inner();
-        instance[ENABLE_SPEND] = vesta::Scalar::from(u64::from(self.enable_spend));
-        instance[ENABLE_OUTPUT] = vesta::Scalar::from(u64::from(self.enable_output));
+        instance[ENABLE_SPENDS] = vesta::Scalar::from(u64::from(self.enable_spend));
+        instance[ENABLE_OUTPUTS] = vesta::Scalar::from(u64::from(self.enable_output));
 
         [instance]
     }
@@ -1420,28 +1451,7 @@ mod tests {
             .titled("Orchard Action Circuit", ("sans-serif", 60))
             .unwrap();
 
-        let circuit: Circuit = Circuit {
-            path: Value::unknown(),
-            pos: Value::unknown(),
-            g_d_old: Value::unknown(),
-            pk_d_old: Value::unknown(),
-            v_old: Value::unknown(),
-            rho_old: Value::unknown(),
-            psi_old: Value::unknown(),
-            rcm_old: Value::unknown(),
-            cm_old: Value::unknown(),
-            alpha: Value::unknown(),
-            ak: Value::unknown(),
-            nk: Value::unknown(),
-            rivk: Value::unknown(),
-            g_d_new: Value::unknown(),
-            pk_d_new: Value::unknown(),
-            v_new: Value::unknown(),
-            psi_new: Value::unknown(),
-            rcm_new: Value::unknown(),
-            rcv: Value::unknown(),
-            circuit_version: OrchardCircuitVersion::FixedPostNu6_2,
-        };
+        let circuit = Circuit::empty(OrchardCircuitVersion::FixedPostNu6_2);
         halo2_proofs::dev::CircuitLayout::default()
             .show_labels(false)
             .view_height(0..(1 << 11))

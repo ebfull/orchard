@@ -1177,6 +1177,7 @@ pub(crate) mod tests {
         for circuit_version in [
             crate::circuit::OrchardCircuitVersion::InsecurePreNu6_2,
             crate::circuit::OrchardCircuitVersion::FixedPostNu6_2,
+            crate::circuit::OrchardCircuitVersion::Ironwood,
         ] {
             let vk = crate::circuit::VerifyingKey::build(circuit_version);
 

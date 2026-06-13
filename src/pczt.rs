@@ -341,7 +341,7 @@ mod tests {
     use crate::{
         builder::{Builder, BundleType},
         bundle::{BundleFormat, Flags},
-        circuit::{OrchardCircuitVersion, ProvingKey},
+        circuit::{OrchardCircuitVersion, ProvingKey, VerifyingKey},
         constants::MERKLE_DEPTH_ORCHARD,
         keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendingKey},
         note::{ExtractedNoteCommitment, RandomSeed, Rho},
@@ -420,6 +420,26 @@ mod tests {
         assert_eq!(bundle.value_balance(), &(-5000));
         // We can successfully bind the bundle.
         bundle.apply_binding_signature(sighash, rng).unwrap();
+    }
+
+    #[test]
+    fn create_proof_uses_proving_key_circuit_version() {
+        let pk = ProvingKey::build(OrchardCircuitVersion::Ironwood);
+        let vk = VerifyingKey::build(OrchardCircuitVersion::Ironwood);
+        let rng = OsRng;
+
+        let mut pczt_bundle = minimal_finalized_pczt_bundle(rng);
+        let sighash = [0; 32];
+        pczt_bundle.create_proof(&pk, rng).unwrap();
+
+        let bundle = pczt_bundle
+            .extract::<i64>()
+            .unwrap()
+            .unwrap()
+            .apply_binding_signature(sighash, rng)
+            .unwrap();
+
+        assert!(bundle.verify_proof(&vk).is_ok());
     }
 
     #[test]

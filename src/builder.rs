@@ -1913,21 +1913,27 @@ mod tests {
     #[test]
     fn restricted_bundle_proof_rejected_by_existing_keys() {
         let mut rng = OsRng;
-        let builder = Builder::new(
-            restricted_bundle_type(true),
-            EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
-        );
-        let (bundle, _) = builder
-            .build::<i64>(&mut rng, OrchardCircuitVersion::FixedPostNu6_2)
-            .unwrap()
-            .unwrap();
 
-        let pk = ProvingKey::build(OrchardCircuitVersion::FixedPostNu6_2);
-        assert!(matches!(
-            bundle.create_proof(&pk, &mut rng),
-            Err(BuildError::Proof(
-                halo2_proofs::plonk::Error::InvalidInstances
-            )),
-        ));
+        for circuit_version in [
+            OrchardCircuitVersion::FixedPostNu6_2,
+            OrchardCircuitVersion::Ironwood,
+        ] {
+            let builder = Builder::new(
+                restricted_bundle_type(true),
+                EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
+            );
+            let (bundle, _) = builder
+                .build::<i64>(&mut rng, circuit_version)
+                .unwrap()
+                .unwrap();
+
+            let pk = ProvingKey::build(circuit_version);
+            assert!(matches!(
+                bundle.create_proof(&pk, &mut rng),
+                Err(BuildError::Proof(
+                    halo2_proofs::plonk::Error::InvalidInstances
+                )),
+            ));
+        }
     }
 }

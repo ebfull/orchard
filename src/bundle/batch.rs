@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::fmt;
 
 use halo2_proofs::plonk;
 use pasta_curves::vesta;
@@ -18,21 +19,39 @@ struct BundleSignature {
     signature: redpallas::batch::Item<SpendAuth, Binding>,
 }
 
-/// Batch validation context for Orchard.
-///
-/// This batch-validates proofs and RedPallas signatures.
-#[derive(Debug, Default)]
-pub struct BatchValidator {
-    proofs: plonk::BatchVerifier<vesta::Affine>,
-    signatures: Vec<BundleSignature>,
+/// Error returned by [`BatchValidator::add_bundle`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BatchError {}
+
+impl fmt::Display for BatchError {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {}
+    }
 }
 
-impl BatchValidator {
-    /// Constructs a new batch validation context.
-    pub fn new() -> Self {
+impl core::error::Error for BatchError {}
+
+/// Batch validation context for Orchard.
+///
+/// This batch-validates proofs and RedPallas signatures. The verifying key is bound at
+/// construction: every bundle added to the batch is validated against it.
+#[derive(Debug)]
+pub struct BatchValidator<'a> {
+    proofs: plonk::BatchVerifier<vesta::Affine>,
+    signatures: Vec<BundleSignature>,
+    /// The verifying key every queued bundle is validated against, and which
+    /// [`Self::validate`] finalizes the proof batch with.
+    vk: &'a VerifyingKey,
+}
+
+impl<'a> BatchValidator<'a> {
+    /// Constructs a new batch validation context that validates against `vk`.
+    pub fn new(vk: &'a VerifyingKey) -> Self {
         BatchValidator {
             proofs: plonk::BatchVerifier::new(),
             signatures: vec![],
+            vk,
         }
     }
 
@@ -41,7 +60,7 @@ impl BatchValidator {
         &mut self,
         bundle: &Bundle<Authorized, V>,
         sighash: [u8; 32],
-    ) {
+    ) -> Result<(), BatchError> {
         for action in bundle.actions().iter() {
             self.signatures.push(BundleSignature {
                 signature: action
@@ -60,6 +79,8 @@ impl BatchValidator {
             .authorization()
             .proof()
             .add_to_batch(&mut self.proofs, bundle.to_instances());
+
+        Ok(())
     }
 
     /// Batch-validates the accumulated bundles.
@@ -68,7 +89,7 @@ impl BatchValidator {
     /// validator is valid, or `false` if one or more are invalid. No attempt is made to
     /// figure out which of the accumulated bundles might be invalid; if that information
     /// is desired, construct separate [`BatchValidator`]s for sub-batches of the bundles.
-    pub fn validate<R: RngCore + CryptoRng>(self, vk: &VerifyingKey, rng: R) -> bool {
+    pub fn validate<R: RngCore + CryptoRng>(self, rng: R) -> bool {
         // https://p.z.cash/TCR:bad-txns-orchard-binding-signature-invalid?partial
 
         if self.signatures.is_empty() {
@@ -85,7 +106,7 @@ impl BatchValidator {
 
         match validator.verify(rng) {
             // If signatures are valid, check the proofs.
-            Ok(()) => self.proofs.finalize(&vk.params, &vk.vk),
+            Ok(()) => self.proofs.finalize(&self.vk.params, &self.vk.vk),
             Err(e) => {
                 debug!("RedPallas batch validation failed: {}", e);
                 false

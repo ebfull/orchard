@@ -7,7 +7,7 @@ pub mod commitments;
 #[cfg(feature = "circuit")]
 mod batch;
 #[cfg(feature = "circuit")]
-pub use batch::BatchValidator;
+pub use batch::{BatchError, BatchValidator};
 
 use core::fmt;
 

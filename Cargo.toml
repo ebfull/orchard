@@ -110,3 +110,11 @@ debug = true
 
 [profile.bench]
 debug = true
+
+# TEMPORARY scaffolding (DO NOT MERGE): patch halo2_proofs to the daira/halo2
+# commit that adds `ConstraintSystem::constants()` (a non-semver-breaking additive
+# accessor) so the cross-address copy-constraint regression test can drive
+# `FloorPlanner::synthesize` on the real Orchard circuit. Drop once that accessor
+# is released in a published halo2_proofs.
+[patch.crates-io]
+halo2_proofs = { git = "https://github.com/daira/halo2", rev = "cd7adb2a1b879afe19e98d9c132e2993b244c914" }

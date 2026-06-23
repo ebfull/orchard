@@ -2096,4 +2096,482 @@ mod tests {
             assert_eq!(instance.rk(), &rk);
         }
     }
+
+    /// Regression guard for the post-NU 6.3 cross-address circuit change, modelled on
+    /// the NU6.2 base-anchoring test (zcash/halo2 #888). Drives the real Orchard circuit
+    /// for `FixedPostNu6_2` and `PostNu6_3` through a copy-recording `Assignment` and
+    /// checks that `PostNu6_3` adds *exactly* the cross-address wiring.
+    ///
+    /// The V1 FloorPlanner renumbers rows, so a subset comparison of raw tuples (as in the
+    /// base-anchoring test) would not be meaningful. This test guards
+    /// (a) the additive delta by count; and
+    /// (b) the cross-address wiring within `PostNu6_3` — in particular that `root`/`anchor`
+    ///     copy the real spent/output address cells (the NU6.2 bug class), not fresh witnesses.
+    ///
+    /// Uses `ConstraintSystem::constants()`, a small read-only accessor added to halo2_proofs.
+    mod cross_address_copy_constraints {
+        use super::super::{
+            AddressPoints, Circuit, CircuitVersion, Config, NonIdentityPoint,
+            OrchardCircuitVersion, DISABLE_CROSS_ADDRESS,
+        };
+        use alloc::{string::String, vec::Vec};
+        use halo2_proofs::{
+            circuit::{floor_planner::V1, Layouter, SimpleFloorPlanner, Value},
+            plonk::{
+                Advice, Any, Assigned, Assignment, Circuit as _, Column, ConstraintSystem, Error,
+                Fixed, FloorPlanner, Instance, Selector,
+            },
+        };
+        use pasta_curves::pallas;
+        use std::collections::HashSet;
+
+        type Cell = (Column<Any>, usize);
+        type CopyC = (Column<Any>, usize, Column<Any>, usize);
+
+        /// Records the structural copy constraints and selector enables emitted during
+        /// synthesis, ignoring witness values (so an unknown-witness circuit suffices).
+        #[derive(Default)]
+        struct CopyRecorder {
+            copies: Vec<CopyC>,
+            selectors: Vec<(Selector, usize)>,
+        }
+
+        impl Assignment<pallas::Base> for CopyRecorder {
+            fn enter_region<NR, N>(&mut self, _: N)
+            where
+                NR: Into<String>,
+                N: FnOnce() -> NR,
+            {
+            }
+            fn exit_region(&mut self) {}
+            fn enable_selector<A, AR>(
+                &mut self,
+                _: A,
+                selector: &Selector,
+                row: usize,
+            ) -> Result<(), Error>
+            where
+                A: FnOnce() -> AR,
+                AR: Into<String>,
+            {
+                self.selectors.push((*selector, row));
+                Ok(())
+            }
+            fn query_instance(
+                &self,
+                _: Column<Instance>,
+                _: usize,
+            ) -> Result<Value<pallas::Base>, Error> {
+                Ok(Value::unknown())
+            }
+            fn assign_advice<V, VR, A, AR>(
+                &mut self,
+                _: A,
+                _: Column<Advice>,
+                _: usize,
+                _: V,
+            ) -> Result<(), Error>
+            where
+                V: FnOnce() -> Value<VR>,
+                VR: Into<Assigned<pallas::Base>>,
+                A: FnOnce() -> AR,
+                AR: Into<String>,
+            {
+                Ok(())
+            }
+            fn assign_fixed<V, VR, A, AR>(
+                &mut self,
+                _: A,
+                _: Column<Fixed>,
+                _: usize,
+                _: V,
+            ) -> Result<(), Error>
+            where
+                V: FnOnce() -> Value<VR>,
+                VR: Into<Assigned<pallas::Base>>,
+                A: FnOnce() -> AR,
+                AR: Into<String>,
+            {
+                Ok(())
+            }
+            fn copy(
+                &mut self,
+                lc: Column<Any>,
+                lr: usize,
+                rc: Column<Any>,
+                rr: usize,
+            ) -> Result<(), Error> {
+                self.copies.push((lc, lr, rc, rr));
+                Ok(())
+            }
+            fn fill_from_row(
+                &mut self,
+                _: Column<Fixed>,
+                _: usize,
+                _: Value<Assigned<pallas::Base>>,
+            ) -> Result<(), Error> {
+                Ok(())
+            }
+            fn push_namespace<NR, N>(&mut self, _: N)
+            where
+                NR: Into<String>,
+                N: FnOnce() -> NR,
+            {
+            }
+            fn pop_namespace(&mut self, _: Option<String>) {}
+        }
+
+        /// Synthesizes the real `Circuit` (with unknown witnesses) for `version` through a
+        /// [`CopyRecorder`], returning the sets of copy constraints and selector enables.
+        fn record(version: OrchardCircuitVersion) -> (HashSet<CopyC>, HashSet<(Selector, usize)>) {
+            let circuit = Circuit::empty(version);
+            let mut cs = ConstraintSystem::<pallas::Base>::default();
+            let config = Circuit::configure(&mut cs);
+            let constants = cs.constants().to_vec();
+            let mut recorder = CopyRecorder::default();
+            V1::synthesize(&mut recorder, &circuit, config, constants)
+                .expect("synthesis should succeed");
+            (
+                recorder.copies.into_iter().collect(),
+                recorder.selectors.into_iter().collect(),
+            )
+        }
+
+        /// The cells copy-constrained equal to `c`: the other endpoint of each copy incident
+        /// to it. A cell's incidence count (number of copies it takes part in) is the length
+        /// of this list.
+        fn partners_of(copies: &HashSet<CopyC>, c: Cell) -> Vec<Cell> {
+            copies
+                .iter()
+                .filter_map(|&(lc, lr, rc, rr)| {
+                    if (lc, lr) == c {
+                        Some((rc, rr))
+                    } else if (rc, rr) == c {
+                        Some((lc, lr))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        }
+
+        #[test]
+        fn post_nu6_3_adds_expected_copies_and_q_enables() {
+            let (nu6_2_copies, nu6_2_sel) = record(OrchardCircuitVersion::FixedPostNu6_2);
+            let (nu6_3_copies, nu6_3_sel) = record(OrchardCircuitVersion::PostNu6_3);
+
+            // `configure` is deterministic, so a fresh run names the same columns/selector.
+            let (q_orchard, primary, advices) = {
+                let mut cs = ConstraintSystem::<pallas::Base>::default();
+                let cfg = Circuit::configure(&mut cs);
+                (cfg.q_orchard, cfg.primary, cfg.advices)
+            };
+            let instance_dca: Cell = (primary.into(), DISABLE_CROSS_ADDRESS);
+            let cell = |k: usize, row: usize| -> Cell { (advices[k].into(), row) };
+
+            // (1) Additive delta only: the cross-address region adds exactly its wiring —
+            // 4 coordinate rows * 10 copies/row = 40 new copies, and 4 new q_orchard enables.
+            // (Base exactness, modulo the floor planner's row renumbering, is the pinned-VK test.)
+            assert_eq!(
+                nu6_3_copies.len(),
+                nu6_2_copies.len() + 40,
+                "PostNu6_3 must add exactly 40 copy constraints (4 rows * 10)"
+            );
+            let q_count = |s: &HashSet<(Selector, usize)>| {
+                s.iter().filter(|(sel, _)| *sel == q_orchard).count()
+            };
+            assert_eq!(
+                q_count(&nu6_3_sel),
+                q_count(&nu6_2_sel) + 4,
+                "PostNu6_3 must enable q_orchard on exactly 4 more rows"
+            );
+
+            // (2) Identify the 4 cross-address rows: q_orchard rows whose advices[0] copies
+            // the disableCrossAddress public input (the row with the main checks does not).
+            let nu6_3_partners = |c: Cell| partners_of(&nu6_3_copies, c);
+            let cross_rows: Vec<usize> = nu6_3_sel
+                .iter()
+                .filter(|(s, _)| *s == q_orchard)
+                .map(|&(_, row)| row)
+                .filter(|&row| nu6_3_partners(cell(0, row)).contains(&instance_dca))
+                .collect();
+            assert_eq!(cross_rows.len(), 4, "exactly 4 cross-address rows");
+
+            // (3) Verify each cross-address row's wiring within PostNu6_3.
+            let mut old_sources: HashSet<Cell> = HashSet::new();
+            let mut new_sources: HashSet<Cell> = HashSet::new();
+            for &row in &cross_rows {
+                // magnitude (advices[2]) and the two padding cells (advices[8], [9]) copy v_old.
+                for k in [2usize, 8, 9] {
+                    assert!(
+                        nu6_3_partners(cell(k, row)).contains(&cell(0, row)),
+                        "advices[{k}] must copy advices[0] (disableCrossAddress)"
+                    );
+                }
+                // v_new, sign, enable_spend, enable_output are constants (Fixed cells).
+                for k in [1usize, 3, 6, 7] {
+                    assert!(
+                        nu6_3_partners(cell(k, row))
+                            .iter()
+                            .any(|p| *p.0.column_type() == Any::Fixed),
+                        "advices[{k}] must copy a constant (Fixed) cell"
+                    );
+                }
+                // root/anchor (advices[4], [5]) copy the *real* old/new address cells.
+                // A fresh witness would be incident to only this one copy.
+                let p_root = nu6_3_partners(cell(4, row));
+                let p_anchor = nu6_3_partners(cell(5, row));
+                assert_eq!(p_root.len(), 1, "advices[4] (root) has one copy partner");
+                assert_eq!(
+                    p_anchor.len(),
+                    1,
+                    "advices[5] (anchor) has one copy partner"
+                );
+                let (src_old, src_new) = (p_root[0], p_anchor[0]);
+                assert!(
+                    nu6_3_partners(src_old).len() >= 2,
+                    "root must copy a real, reused cell (not a fresh witness)"
+                );
+                assert!(
+                    nu6_3_partners(src_new).len() >= 2,
+                    "anchor must copy a real, reused cell (not a fresh witness)"
+                );
+                assert_ne!(src_old, src_new, "root and anchor must differ");
+                old_sources.insert(src_old);
+                new_sources.insert(src_new);
+            }
+
+            // The 4 rows cover 4 distinct old coords and 4 distinct new coords
+            // (g_d.x, g_d.y, pk_d.x, pk_d.y).
+            assert_eq!(old_sources.len(), 4, "4 distinct old-address cells");
+            assert_eq!(new_sources.len(), 4, "4 distinct new-address cells");
+        }
+
+        /// A minimal circuit that witnesses 4 address points and applies *only*
+        /// `synthesize_cross_address_checks` to them, with no surrounding Orchard logic.
+        ///
+        /// This isolates the cross-address constraints so they can be checked exhaustively:
+        /// every `q_orchard` enable is a check row (there is no base-circuit row to exclude),
+        /// the check rows are not perturbed by base-circuit layout, and the only advice cells
+        /// the checks can copy a coordinate from are the eight freshly witnessed ones.
+        struct CrossAddressOnly;
+
+        impl halo2_proofs::plonk::Circuit<pallas::Base> for CrossAddressOnly {
+            type Config = Config;
+            type FloorPlanner = SimpleFloorPlanner;
+
+            fn without_witnesses(&self) -> Self {
+                CrossAddressOnly
+            }
+
+            fn configure(meta: &mut ConstraintSystem<pallas::Base>) -> Config {
+                Config::configure(meta)
+            }
+
+            fn synthesize(
+                &self,
+                config: Config,
+                mut layouter: impl Layouter<pallas::Base>,
+            ) -> Result<(), Error> {
+                let ecc_chip = config.ecc_chip(CircuitVersion::AnchoredBase);
+                let witness = |layouter: &mut _, name: &'static str| {
+                    NonIdentityPoint::new(
+                        ecc_chip.clone(),
+                        Layouter::namespace(layouter, || name),
+                        Value::<pallas::Affine>::unknown(),
+                    )
+                };
+                let addrs = AddressPoints {
+                    g_d_old: witness(&mut layouter, "g_d_old")?,
+                    pk_d_old: witness(&mut layouter, "pk_d_old")?,
+                    g_d_new: witness(&mut layouter, "g_d_new")?,
+                    pk_d_new: witness(&mut layouter, "pk_d_new")?,
+                };
+                Circuit::synthesize_cross_address_checks(&config, &mut layouter, &addrs)
+            }
+        }
+
+        /// Records the structural wiring of [`CrossAddressOnly`] through a [`CopyRecorder`].
+        fn record_isolated() -> (HashSet<CopyC>, HashSet<(Selector, usize)>) {
+            let mut cs = ConstraintSystem::<pallas::Base>::default();
+            let config = Circuit::configure(&mut cs);
+            let constants = cs.constants().to_vec();
+            let mut recorder = CopyRecorder::default();
+            SimpleFloorPlanner::synthesize(&mut recorder, &CrossAddressOnly, config, constants)
+                .expect("synthesis should succeed");
+            (
+                recorder.copies.into_iter().collect(),
+                recorder.selectors.into_iter().collect(),
+            )
+        }
+
+        /// Checks the cross-address constraints completely, in isolation from the rest of the
+        /// circuit. Together with the renumbering-robust full-circuit delta test above, this
+        /// pins down both that the new checks are exactly the cross-address wiring, and that
+        /// that wiring is itself correct.
+        ///
+        /// Coordinate-system note: the recorder reports copies in absolute `(column, row)`
+        /// terms. We never need the region-relative `AssignedCell` coordinates of the
+        /// witnessed points, because the layout structure determines everything we assert:
+        /// each [`NonIdentityPoint`] is one region with `x` and `y` on a single row (so a
+        /// point's two coordinates share a row and differ only by column), and the check is
+        /// one contiguous region (so its rows, sorted ascending, are check offsets 0..4 =
+        /// `g_d.x, g_d.y, pk_d.x, pk_d.y`).
+        #[test]
+        fn cross_address_checks_pin_down_the_wiring_in_isolation() {
+            let (copies, selectors) = record_isolated();
+
+            // `configure` is deterministic, so a fresh run names the same columns/selector.
+            let (q_orchard, primary, advices) = {
+                let mut cs = ConstraintSystem::<pallas::Base>::default();
+                let cfg = Circuit::configure(&mut cs);
+                (cfg.q_orchard, cfg.primary, cfg.advices)
+            };
+            let instance_dca: Cell = (primary.into(), DISABLE_CROSS_ADDRESS);
+            let cell = |k: usize, row: usize| -> Cell { (advices[k].into(), row) };
+            let partners = |c: Cell| partners_of(&copies, c);
+
+            // (1) Every q_orchard enable is a cross-address row: there is no base circuit, so
+            // these four rows are the entirety of the gate's use.
+            let mut rows: Vec<usize> = selectors
+                .iter()
+                .filter(|(s, _)| *s == q_orchard)
+                .map(|&(_, row)| row)
+                .collect();
+            assert_eq!(
+                rows.len(),
+                4,
+                "exactly four coordinate-check rows enable q_orchard, and nothing else does"
+            );
+            // Sorted ascending, the contiguous check region's rows are offsets 0..4, i.e.
+            // g_d.x, g_d.y, pk_d.x, pk_d.y in order.
+            rows.sort_unstable();
+
+            // (2) The checks contribute exactly forty copies (four rows x ten per row), and
+            // every one is incident to a check row — the witness regions add none that are.
+            let incident_to_checks = copies
+                .iter()
+                .filter(|&&(lc, lr, rc, rr)| {
+                    rows.iter().any(|&row| {
+                        (0..10).any(|k| (lc, lr) == cell(k, row) || (rc, rr) == cell(k, row))
+                    })
+                })
+                .count();
+            assert_eq!(
+                incident_to_checks, 40,
+                "the cross-address checks add exactly 40 copies (4 rows * 10)"
+            );
+
+            // (3) Full per-row wiring. Because the rows are isolated, each assertion is exact
+            // rather than "at least": every cell has precisely the copy partners it should.
+            let single_partner = |c: Cell| -> Cell {
+                let p = partners(c);
+                assert_eq!(p.len(), 1, "{c:?} must have exactly one copy partner");
+                p[0]
+            };
+            let mut old_src: Vec<Cell> = Vec::new();
+            let mut new_src: Vec<Cell> = Vec::new();
+            for &row in &rows {
+                // advices[0] copies the disableCrossAddress public input (and is in turn
+                // copied by magnitude/padding below, so its partner set is larger).
+                assert!(
+                    partners(cell(0, row)).contains(&instance_dca),
+                    "advices[0] copies disableCrossAddress"
+                );
+                // magnitude (advices[2]) and the two padding cells (advices[8], [9]) copy it.
+                for k in [2usize, 8, 9] {
+                    assert_eq!(
+                        partners(cell(k, row)),
+                        vec![cell(0, row)],
+                        "advices[{k}] copies advices[0] (disableCrossAddress) and nothing else"
+                    );
+                }
+                // v_new, sign, enable_spend, enable_output are wired to constant (Fixed) cells.
+                for k in [1usize, 3, 6, 7] {
+                    let p = single_partner(cell(k, row));
+                    assert_eq!(
+                        *p.0.column_type(),
+                        Any::Fixed,
+                        "advices[{k}] copies a constant (Fixed) cell"
+                    );
+                }
+                // root/anchor (advices[4], [5]) each copy exactly one cell, which must lie
+                // outside the check rows — i.e. a witnessed coordinate.
+                let src_old = single_partner(cell(4, row));
+                let src_new = single_partner(cell(5, row));
+                assert!(
+                    !rows.contains(&src_old.1),
+                    "root copies a witnessed coordinate (outside the check rows)"
+                );
+                assert!(
+                    !rows.contains(&src_new.1),
+                    "anchor copies a witnessed coordinate (outside the check rows)"
+                );
+                old_src.push(src_old);
+                new_src.push(src_new);
+            }
+
+            // (4) The eight coordinate sources are structurally exactly the four witnessed
+            // points' x/y cells. Using only absolute coordinates (see the note above):
+            //   - x and y of one point share a row and differ by column;
+            //   - the two old points (and the two new points) are on different rows;
+            //   - every x sits in one shared witness column, every y in another;
+            //   - each check copies distinct old and new cells, but old.x/new.x (and
+            //     old.y/new.y) share their column.
+            let check = |s: &[Cell], which: &str| {
+                // s = [pt0.x, pt0.y, pt1.x, pt1.y]
+                assert_eq!(
+                    s[0].1, s[1].1,
+                    "{which}: a point's x and y share one witness row"
+                );
+                assert_ne!(
+                    s[0].0, s[1].0,
+                    "{which}: a point's x and y are in different columns"
+                );
+                assert_eq!(
+                    s[2].1, s[3].1,
+                    "{which}: a point's x and y share one witness row"
+                );
+                assert_ne!(
+                    s[2].0, s[3].0,
+                    "{which}: a point's x and y are in different columns"
+                );
+                assert_ne!(
+                    s[0].1, s[2].1,
+                    "{which}: the two points are witnessed on different rows"
+                );
+                assert_eq!(
+                    s[0].0, s[2].0,
+                    "{which}: both x-coordinates share the witness x-column"
+                );
+                assert_eq!(
+                    s[1].0, s[3].0,
+                    "{which}: both y-coordinates share the witness y-column"
+                );
+            };
+            check(&old_src, "old");
+            check(&new_src, "new");
+            // old (spent) and new (created) points are distinct cells, column-aligned by role.
+            assert_eq!(
+                old_src[0].0, new_src[0].0,
+                "old.x and new.x share the witness x-column"
+            );
+            assert_eq!(
+                old_src[1].0, new_src[1].0,
+                "old.y and new.y share the witness y-column"
+            );
+            for i in 0..4 {
+                assert_ne!(
+                    old_src[i], new_src[i],
+                    "each check copies distinct old and new coordinate cells"
+                );
+            }
+            let all: HashSet<Cell> = old_src.iter().chain(new_src.iter()).copied().collect();
+            assert_eq!(
+                all.len(),
+                8,
+                "eight distinct witnessed coordinate cells in total"
+            );
+        }
+    }
 }
